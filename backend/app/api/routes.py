@@ -592,6 +592,160 @@ async def delete_post(
         )
 
 
+@router.post("/api/posts/{post_id}/retry", status_code=status.HTTP_200_OK)
+async def retry_failed_post(
+    post_id: str,
+    authorization: Optional[str] = None,
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Manually retry a failed post.
+    
+    WHY:
+    - Users shouldn't have to wait for automatic retry schedule
+    - Improves UX when they fix the underlying issue
+    - Empowers users to take action
+    
+    Args:
+        post_id: Post to retry
+        authorization: JWT token
+        current_user: User ID (from token)
+    
+    Returns:
+        Success message
+    
+    Raises:
+        HTTPException: If post not found, not failed, or retry fails
+    """
+    try:
+        post = await PostService.get_post(post_id)
+        
+        if not post:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Post not found",
+            )
+        
+        # Verify ownership
+        if post["user_id"] != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to retry this post",
+            )
+        
+        # Only retry failed posts
+        if post["status"] != PostStatus.FAILED.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Only failed posts can be retried (current status: {post['status']})",
+            )
+        
+        # Reset status to scheduled for immediate retry
+        await PostService.update_post_status(post_id, PostStatus.SCHEDULED)
+        
+        logger.info(f"Post {post_id} retried by user {current_user}")
+        
+        return {
+            "message": "Post queued for retry",
+            "post_id": post_id,
+            "status": "scheduled",
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrying post: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retry post",
+        )
+
+
+@router.get("/api/posts/{post_id}/stats", response_model=dict)
+async def get_post_stats(
+    post_id: str,
+    authorization: Optional[str] = None,
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Get post performance statistics from LinkedIn.
+    
+    WHY:
+    - Show users how their posts perform
+    - Track engagement metrics
+    - Measure automation effectiveness
+    - Provide analytics dashboard insights
+    
+    Args:
+        post_id: Post to get stats for
+        authorization: JWT token
+        current_user: User ID (from token)
+    
+    Returns:
+        Post engagement statistics
+    
+    Raises:
+        HTTPException: If post not found or not posted yet
+    """
+    try:
+        post = await PostService.get_post(post_id)
+        
+        if not post or post["status"] != PostStatus.POSTED.value:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Post not found or not yet posted",
+            )
+        
+        if post["user_id"] != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view these stats",
+            )
+        
+        # Get user credentials
+        db = get_database()
+        user = await db["users"].find_one({"_id": ObjectId(current_user)})
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+        
+        # Fetch stats from LinkedIn
+        from app.services.linkedin_service import LinkedInService
+        
+        linkedin_post_id = post.get("linkedin_post_id")
+        if not linkedin_post_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Post has no LinkedIn ID",
+            )
+        
+        stats = await LinkedInService.get_post_stats(
+            post_id=linkedin_post_id,
+            access_token=user["linkedin_access_token"],
+        )
+        
+        return {
+            "post_id": post_id,
+            "linkedin_post_id": linkedin_post_id,
+            "likes": stats["likes"],
+            "comments": stats["comments"],
+            "reposts": stats["reposts"],
+            "engagement": stats["engagement"],
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching post stats: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch post statistics",
+        )
+
+
 @router.get("/api/me", response_model=UserResponse)
 async def get_current_user_info(
     authorization: Optional[str] = None,
