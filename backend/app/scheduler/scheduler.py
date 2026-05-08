@@ -29,6 +29,7 @@ For now, APScheduler is perfect.
 """
 
 import asyncio
+from typing import Optional
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -38,6 +39,7 @@ from apscheduler.jobstores.memory import MemoryJobStore
 from app.utils.logger import get_logger
 from app.models.schemas import PostStatus
 from app.services.post_service import PostService
+from app.services.auth_service import AuthService
 
 logger = get_logger(__name__)
 
@@ -196,9 +198,11 @@ async def publish_post_job(post_id: str) -> None:
         while retry_count < max_retries:
             try:
                 # Call LinkedIn API to publish
-                # TODO: Implement LinkedIn API call
+                member_id = user.get("linkedin_member_id") or user.get("linkedin_id")
+
                 result = await publish_to_linkedin(
                     access_token=user["linkedin_access_token"],
+                    linkedin_member_id=member_id,
                     content=post["content"],
                 )
 
@@ -241,17 +245,22 @@ async def publish_post_job(post_id: str) -> None:
         )
 
 
-async def publish_to_linkedin(access_token: str, content: str) -> dict:
+async def publish_to_linkedin(
+    access_token: str,
+    linkedin_member_id: Optional[str],
+    content: str,
+) -> dict:
     """
     Call LinkedIn API to publish a post.
 
-    TODO: Implement actual LinkedIn API call.
-
-    For now, this is a stub that simulates successful post.
-    We'll implement the real API integration next.
+    Uses LinkedIn's /v2/ugcPosts endpoint with w_member_social scope.
+    
+    IMPORTANT: The author must be in format urn:li:person:<id>
+    LinkedIn rejects "urn:li:person:me" format.
 
     Args:
         access_token: User's LinkedIn OAuth access token
+        linkedin_member_id: User's LinkedIn member ID (string or urn format)
         content: Post content to publish
 
     Returns:
@@ -260,12 +269,90 @@ async def publish_to_linkedin(access_token: str, content: str) -> dict:
     Raises:
         Exception: If LinkedIn API call fails
     """
-    # TODO: Implement real LinkedIn API call
-    # For MVP, simulate success
-    logger.info(f"Publishing to LinkedIn: {content[:50]}...")
+    import aiohttp
 
-    # Simulated response
-    return {"id": "urn:li:share:7001234567890", "status": "posted"}
+    url = "https://api.linkedin.com/v2/ugcPosts"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
+    }
+
+    if not linkedin_member_id:
+        raise Exception("Missing LinkedIn member ID for author URN")
+
+    # Convert to proper author URN format if needed
+    if linkedin_member_id.startswith("urn:li:"):
+        author_urn = linkedin_member_id
+    else:
+        author_urn = f"urn:li:person:{linkedin_member_id}"
+
+    # Standard UGC Posts payload with correct author format
+    payload = {
+        "author": author_urn,
+        "lifecycleState": "PUBLISHED",
+        "specificContent": {
+            "com.linkedin.ugc.ShareContent": {
+                "shareCommentary": {
+                    "text": content
+                },
+                "shareMediaCategory": "NONE"
+            }
+        },
+        "visibility": {
+            "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
+        }
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            logger.info(f"Posting to LinkedIn: {content[:50]}...")
+            
+            async with session.post(url, json=payload, headers=headers) as response:
+                response_text = await response.text()
+                
+                if response.status == 201:
+                    # Success - LinkedIn returns 201 Created with post ID in header
+                    post_id = response.headers.get("X-LinkedIn-Id", "")
+                    logger.info(f"✅ Successfully posted to LinkedIn. Post ID: {post_id}")
+                    return {
+                        "id": post_id,
+                        "status": "posted"
+                    }
+                elif response.status == 401:
+                    logger.error(f"❌ LinkedIn auth failed (401): Token may be expired")
+                    raise Exception("LinkedIn authentication failed - token may be expired or invalid")
+                elif response.status == 403:
+                    logger.error(f"❌ LinkedIn permission denied (403)")
+                    # Log full error for debugging
+                    logger.error(f"Full error response: {response_text}")
+                    
+                    # Check common issues
+                    if "w_member_social" in response_text or "scope" in response_text.lower():
+                        raise Exception("❌ w_member_social scope not approved by LinkedIn. Check your app settings at https://www.linkedin.com/developers/apps")
+                    elif "Unpermitted fields" in response_text:
+                        logger.error("LinkedIn rejected the request format. This may indicate:")
+                        logger.error("1. w_member_social scope is not fully approved")
+                        logger.error("2. Your app hasn't been approved for member posts")
+                        logger.error("3. API format may need updating for current LinkedIn version")
+                        raise Exception("LinkedIn API format incompatibility - check app approval status")
+                    else:
+                        raise Exception(f"Permission denied: {response_text[:200]}")
+                elif response.status == 422:
+                    logger.error(f"❌ Validation error (422): {response_text}")
+                    raise Exception(f"Invalid request format: {response_text[:200]}")
+                else:
+                    logger.error(f"❌ LinkedIn API error ({response.status})")
+                    logger.error(f"Response: {response_text[:500]}")
+                    raise Exception(f"LinkedIn API error: {response.status}")
+
+    except aiohttp.ClientError as e:
+        logger.error(f"❌ Network error posting to LinkedIn: {str(e)}")
+        raise Exception(f"Network error: {str(e)}")
+    except Exception as e:
+        # Re-raise with additional context
+        logger.error(f"❌ Post to LinkedIn failed: {str(e)}")
+        raise
 
 
 async def load_existing_scheduled_posts() -> None:

@@ -13,31 +13,60 @@ export default function DashboardPage() {
     const posts = usePostStore((state) => state.posts)
     const setPosts = usePostStore((state) => state.setPosts)
     const [isLoading, setIsLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
 
     useEffect(() => {
-        if (!user) {
-            router.push('/login')
+        // If no user after a reasonable delay, redirect to login
+        if (user === null) {
+            const timer = setTimeout(() => {
+                router.push('/login')
+            }, 100)
+            return () => clearTimeout(timer)
+        }
+
+        // If user is undefined (still loading), don't do anything yet
+        if (user === undefined) {
             return
         }
 
+        // User is loaded and authenticated, fetch posts
         const fetchPosts = async () => {
             try {
+                setIsLoading(true)
                 const data = await postAPI.list()
-                setPosts(data.posts || [])
+                setPosts(data.items || [])
             } catch (error) {
-                console.error('Failed to fetch posts')
+                console.error('Failed to fetch posts:', error)
+                setError('Failed to load posts')
             } finally {
                 setIsLoading(false)
             }
         }
 
         fetchPosts()
-    }, [user, router, setPosts])
+    }, [user])
 
-    if (!user || isLoading) {
+    if (user === undefined || user === null || isLoading) {
         return (
             <div className="flex justify-center items-center min-h-screen">
                 <LoadingSpinner message="Loading dashboard..." />
+            </div>
+        )
+    }
+
+    if (error) {
+        return (
+            <div className="flex justify-center items-center min-h-screen">
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4 max-w-md">
+                    <h2 className="text-red-800 font-semibold">Error</h2>
+                    <p className="text-red-700">{error}</p>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="mt-4 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                    >
+                        Retry
+                    </button>
+                </div>
             </div>
         )
     }

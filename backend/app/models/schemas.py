@@ -188,6 +188,7 @@ class UserDB(BaseModel):
     email: str
     name: str
     linkedin_id: str
+    linkedin_member_id: Optional[str] = None
     linkedin_access_token: str  # Encrypted in production
     token_expiry: datetime
     created_at: datetime = Field(default_factory=datetime.utcnow)

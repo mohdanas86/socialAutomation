@@ -118,6 +118,7 @@ class AuthService:
         linkedin_id: str,
         linkedin_access_token: str,
         token_expiry: datetime,
+        linkedin_member_id: Optional[str] = None,
     ) -> Dict:
         """
         Get existing user or create new one after OAuth login.
@@ -152,14 +153,18 @@ class AuthService:
             if existing_user:
                 # User exists, update their LinkedIn token
                 # (tokens expire, so we update on each login)
+                update_fields = {
+                    "linkedin_access_token": linkedin_access_token,
+                    "token_expiry": token_expiry,
+                    "updated_at": datetime.utcnow(),
+                }
+                if linkedin_member_id:
+                    update_fields["linkedin_member_id"] = linkedin_member_id
+
                 updated_user = await users_col.find_one_and_update(
                     {"_id": existing_user["_id"]},
                     {
-                        "$set": {
-                            "linkedin_access_token": linkedin_access_token,
-                            "token_expiry": token_expiry,
-                            "updated_at": datetime.utcnow(),
-                        }
+                        "$set": update_fields,
                     },
                     return_document=True,
                 )
@@ -172,6 +177,7 @@ class AuthService:
                     email=email,
                     name=name,
                     linkedin_id=linkedin_id,
+                    linkedin_member_id=linkedin_member_id,
                     linkedin_access_token=linkedin_access_token,
                     token_expiry=token_expiry,
                 )
@@ -355,32 +361,64 @@ class AuthService:
             Exception: If LinkedIn API fails
         """
         try:
-            url = "https://api.linkedin.com/v2/me"
-            
             headers = {
                 "Authorization": f"Bearer {access_token}",
                 "Accept": "application/json",
+                "LinkedIn-Version": "202405",
+                "X-Restli-Protocol-Version": "2.0.0",
             }
+
+            # Prefer OpenID Connect userinfo (works with openid/profile/email scopes)
+            userinfo_url = "https://api.linkedin.com/v2/userinfo"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(userinfo_url, headers=headers) as response:
+                    if response.status == 200:
+                        userinfo = await response.json()
+                        linkedin_id = userinfo.get("sub")
+                        first_name = userinfo.get("given_name") or userinfo.get("name", "User")
+                        last_name = userinfo.get("family_name", "")
+
+                        if linkedin_id:
+                            logger.info("Fetched LinkedIn userinfo profile")
+                            return {
+                                "linkedin_id": linkedin_id,
+                                "first_name": first_name,
+                                "last_name": last_name,
+                            }
+                    else:
+                        error_text = await response.text()
+                        logger.warning(
+                            f"LinkedIn userinfo fetch failed: {response.status} - {error_text}"
+                        )
+
+            # Fallback to legacy /v2/me for numeric member id
+            url = "https://api.linkedin.com/v2/me"
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        logger.error(f"LinkedIn profile fetch failed: {response.status} - {error_text}")
+                        logger.error(
+                            f"LinkedIn profile fetch failed: {response.status} - {error_text}"
+                        )
                         raise Exception(f"LinkedIn profile fetch failed: {response.status}")
-                    
+
                     profile = await response.json()
-                    
+
                     # Handle both v1 and v2 API response formats
                     linkedin_id = profile.get("id") or profile.get("sub")
-                    first_name = profile.get("given_name") or profile.get("localizedFirstName", "User")
-                    last_name = profile.get("family_name") or profile.get("localizedLastName", "")
-                    
+                    first_name = profile.get("given_name") or profile.get(
+                        "localizedFirstName", "User"
+                    )
+                    last_name = profile.get("family_name") or profile.get(
+                        "localizedLastName", ""
+                    )
+
                     if not linkedin_id:
                         raise Exception("No LinkedIn ID found in profile response")
-                    
+
                     logger.info(f"Fetched LinkedIn profile for user {linkedin_id}")
-                    
+
                     return {
                         "linkedin_id": linkedin_id,
                         "first_name": first_name,
@@ -413,6 +451,8 @@ class AuthService:
             headers = {
                 "Authorization": f"Bearer {access_token}",
                 "Accept": "application/json",
+                "LinkedIn-Version": "202405",
+                "X-Restli-Protocol-Version": "2.0.0",
             }
             
             async with aiohttp.ClientSession() as session:

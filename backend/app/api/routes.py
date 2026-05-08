@@ -256,22 +256,27 @@ async def oauth_callback(
         # Step 3: Calculate token expiry
         token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
         
-        # Step 4: Create/update user in database
+        # Step 4: Use OpenID Connect subject as person identifier
+        # LinkedIn userinfo returns "sub" which maps to person URN suffix.
+        linkedin_member_id = profile_data.get("linkedin_id")
+
+        # Step 5: Create/update user in database
         full_name = f"{profile_data['first_name']} {profile_data['last_name']}".strip()
         user = await AuthService.get_or_create_user(
             email=profile_data.get("email") or f"user_{profile_data['linkedin_id']}@linkedin.com",
             name=full_name or "LinkedIn User",
             linkedin_id=profile_data["linkedin_id"],
+            linkedin_member_id=linkedin_member_id,
             linkedin_access_token=linkedin_access_token,
             token_expiry=token_expiry,
         )
         
-        # Step 5: Generate JWT token for our app
+        # Step 6: Generate JWT token for our app
         jwt_token = AuthService.create_access_token(str(user["_id"]))
         
         logger.info(f"✅ User authenticated: {user['_id']} (LinkedIn: {profile_data['linkedin_id']})")
         
-        # Step 6: Redirect to frontend with token
+        # Step 7: Redirect to frontend with token
         # Frontend will store token and redirect to dashboard
         from fastapi.responses import RedirectResponse
         
@@ -716,66 +721,158 @@ async def get_post_stats(
     Returns:
         Post engagement statistics
     
-    Raises:
-        HTTPException: If post not found or not posted yet
+    """
+    return {
+        "error": "Not yet implemented",
+        "message": "Analytics coming soon",
+    }
+
+
+# ===========================
+# Debug Endpoints
+# ===========================
+
+
+@router.get("/debug/linkedin/token-info", response_model=dict)
+async def debug_linkedin_token_info(
+    current_user: str = Depends(get_current_user),
+):
+    """
+    DEBUG ENDPOINT: Check LinkedIn token scopes and validity.
+    
+    Helps troubleshoot:
+    - Missing w_member_social scope
+    - Expired tokens
+    - Invalid token format
+    
+    Args:
+        current_user: User ID (from JWT token)
+    
+    Returns:
+        Token info and scopes from LinkedIn
     """
     try:
-        post = await PostService.get_post(post_id)
-        
-        if not post or post["status"] != PostStatus.POSTED.value:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Post not found or not yet posted",
-            )
-        
-        if post["user_id"] != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view these stats",
-            )
-        
-        # Get user credentials
-        db = get_database()
-        user = await db["users"].find_one({"_id": ObjectId(current_user)})
-        
+        # Get user's LinkedIn token from database
+        user = await AuthService.get_user_by_id(current_user)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found",
             )
         
-        # Fetch stats from LinkedIn
-        from app.services.linkedin_service import LinkedInService
-        
-        linkedin_post_id = post.get("linkedin_post_id")
-        if not linkedin_post_id:
+        access_token = user.get("linkedin_access_token")
+        if not access_token:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Post has no LinkedIn ID",
+                detail="No LinkedIn access token found for user",
             )
         
-        stats = await LinkedInService.get_post_stats(
-            post_id=linkedin_post_id,
-            access_token=user["linkedin_access_token"],
+        # Test if token works by calling /me endpoint
+        import aiohttp
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "LinkedIn-Version": "202405",
+            "X-Restli-Protocol-Version": "2.0.0",
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.linkedin.com/v2/userinfo",
+                headers=headers,
+            ) as response:
+                if response.status == 200:
+                    userinfo_data = await response.json()
+                else:
+                    userinfo_data = {
+                        "error": f"Status {response.status}",
+                        "detail": await response.text(),
+                    }
+
+            async with session.get(
+                "https://api.linkedin.com/v2/me",
+                headers=headers,
+            ) as response:
+                if response.status == 200:
+                    me_data = await response.json()
+                else:
+                    me_data = {
+                        "error": f"Status {response.status}",
+                        "detail": await response.text(),
+                    }
+        
+        return {
+            "user_id": str(user["_id"]),
+            "email": user.get("email"),
+            "linkedin_id": user.get("linkedin_id"),
+            "linkedin_member_id": user.get("linkedin_member_id"),
+            "token_present": True,
+            "token_preview": f"{access_token[:20]}..." if access_token else None,
+            "userinfo_endpoint_test": userinfo_data,
+            "me_endpoint_test": me_data,
+            "message": "Token is working. If you see 'error' in me_endpoint_test, check your scopes on LinkedIn."
+        }
+    
+    except Exception as e:
+        logger.error(f"Error checking token info: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error checking token: {str(e)}",
+        )
+
+
+@router.post("/debug/test-post-to-linkedin", response_model=dict)
+async def test_post_to_linkedin(
+    current_user: str = Depends(get_current_user),
+):
+    """
+    DEBUG ENDPOINT: Test posting to LinkedIn directly.
+    
+    This helps diagnose if w_member_social scope is working.
+    
+    Args:
+        current_user: User ID (from JWT token)
+    
+    Returns:
+        Response from LinkedIn API
+    """
+    try:
+        user = await AuthService.get_user_by_id(current_user)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+        
+        access_token = user.get("linkedin_access_token")
+        if not access_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No LinkedIn access token",
+            )
+        
+        # Test posting
+        from app.scheduler.scheduler import publish_to_linkedin
+        
+        test_content = "🧪 Test post from Social Automation - If you see this, posting works! ✅"
+        result = await publish_to_linkedin(
+            access_token=access_token,
+            linkedin_member_id=user.get("linkedin_member_id"),
+            content=test_content,
         )
         
         return {
-            "post_id": post_id,
-            "linkedin_post_id": linkedin_post_id,
-            "likes": stats["likes"],
-            "comments": stats["comments"],
-            "reposts": stats["reposts"],
-            "engagement": stats["engagement"],
+            "success": True,
+            "message": "Test post sent successfully!",
+            "result": result,
         }
     
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error fetching post stats: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch post statistics",
-        )
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Test post failed - check the error above"
+        }
 
 
 @router.get("/api/me", response_model=UserResponse)

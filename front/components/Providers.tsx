@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuthStore } from '@/lib/store'
 import { userAPI } from '@/lib/api'
 import Cookie from 'js-cookie'
@@ -8,36 +8,56 @@ import Cookie from 'js-cookie'
 export function Providers({ children }: { children: React.ReactNode }) {
     const setUser = useAuthStore((state) => state.setUser)
     const setToken = useAuthStore((state) => state.setToken)
+    const [isInitializing, setIsInitializing] = useState(true)
 
     useEffect(() => {
-        // Check for token in URL (from OAuth callback)
-        const params = new URLSearchParams(window.location.search)
-        const token = params.get('token')
+        const initializeAuth = async () => {
+            try {
+                // Check for token in URL (from OAuth callback)
+                const params = new URLSearchParams(window.location.search)
+                const tokenFromUrl = params.get('token')
 
-        if (token) {
-            // Store token in cookie and state
-            Cookie.set('token', token, { expires: 7 })
-            setToken(token)
-            // Remove token from URL
-            window.history.replaceState({}, document.title, window.location.pathname)
+                // Token priority: URL > Cookie > Store
+                let token = tokenFromUrl || Cookie.get('token') || useAuthStore.getState().token
+
+                if (tokenFromUrl) {
+                    // Store token in cookie and state
+                    Cookie.set('token', tokenFromUrl, { expires: 7 })
+                    setToken(tokenFromUrl)
+                    token = tokenFromUrl
+
+                    // Remove token from URL (clean history)
+                    window.history.replaceState({}, document.title, window.location.pathname)
+                }
+
+                // If we have a token, fetch user data
+                if (token) {
+                    try {
+                        const user = await userAPI.getMe()
+                        setUser(user)
+                        setToken(token)
+                    } catch (error) {
+                        console.error('Failed to fetch user:', error)
+                        // Token is invalid, clear it
+                        Cookie.remove('token')
+                        setToken(null)
+                        setUser(null)
+                    }
+                }
+            } finally {
+                // Mark initialization as complete
+                setIsInitializing(false)
+            }
         }
 
-        // Fetch user if token exists
-        const storedToken =
-            token || Cookie.get('token') || useAuthStore.getState().token
-        if (storedToken) {
-            setToken(storedToken)
-            userAPI
-                .getMe()
-                .then((user) => {
-                    setUser(user)
-                })
-                .catch(() => {
-                    Cookie.remove('token')
-                    setToken(null)
-                })
-        }
+        initializeAuth()
     }, [setUser, setToken])
+
+    // Don't render children until auth is initialized
+    // This prevents premature redirects
+    if (isInitializing) {
+        return null
+    }
 
     return <>{children}</>
 }
