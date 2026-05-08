@@ -1,54 +1,87 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { useAuthStore, usePostStore } from '@/lib/store'
 import { postAPI } from '@/lib/api'
 import { LoadingSpinner } from '@/components/LoadingSpinner'
-import Link from 'next/link'
+import { ChartAreaInteractive } from '@/components/chart-area-interactive'
+import { SectionCards } from '@/components/section-cards'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import {
+    FileTextIcon,
+    CheckCircleIcon,
+    ClockIcon,
+    AlertCircleIcon,
+    ArrowRightIcon,
+    PlusIcon,
+    SparklesIcon,
+} from 'lucide-react'
 
+// ─── Status badge ─────────────────────────────────────────────
+function StatusBadge({ status }: { status: string }) {
+    const map: Record<string, { label: string; className: string }> = {
+        posted:    { label: 'Published', className: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25' },
+        scheduled: { label: 'Scheduled', className: 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/25' },
+        failed:    { label: 'Failed',    className: 'bg-rose-500/15 text-rose-400 border-rose-500/25' },
+        draft:     { label: 'Draft',     className: 'bg-muted text-muted-foreground border-border' },
+    }
+    const config = map[status] ?? map.draft
+    return (
+        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${config.className}`}>
+            {config.label}
+        </span>
+    )
+}
+
+// ─── Recent post row ──────────────────────────────────────────
+function PostRow({ post }: { post: { _id: string; content: string; status: string; scheduled_time?: string } }) {
+    const iconMap: Record<string, React.ReactNode> = {
+        posted:    <CheckCircleIcon className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />,
+        scheduled: <ClockIcon       className="h-3.5 w-3.5 text-fuchsia-400 shrink-0 mt-0.5" />,
+        failed:    <AlertCircleIcon className="h-3.5 w-3.5 text-rose-400 shrink-0 mt-0.5" />,
+        draft:     <FileTextIcon    className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />,
+    }
+    return (
+        <div className="flex items-start gap-3 rounded-lg border border-border/40 bg-card/50 p-3 transition-colors hover:bg-card/80 hover:border-border/60">
+            {iconMap[post.status] ?? iconMap.draft}
+            <div className="min-w-0 flex-1">
+                <p className="line-clamp-2 text-sm leading-snug">{post.content}</p>
+                {post.scheduled_time && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                        {new Date(post.scheduled_time).toLocaleDateString('en-US', {
+                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                        })}
+                    </p>
+                )}
+            </div>
+            <StatusBadge status={post.status} />
+        </div>
+    )
+}
+
+// ─── Page ─────────────────────────────────────────────────────
 export default function DashboardPage() {
-    const router = useRouter()
-    const user = useAuthStore((state) => state.user)
-    const posts = usePostStore((state) => state.posts)
-    const setPosts = usePostStore((state) => state.setPosts)
+    const user    = useAuthStore((s) => s.user)
+    const posts   = usePostStore((s) => s.posts)
+    const setPosts = usePostStore((s) => s.setPosts)
     const [isLoading, setIsLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
+    const [error, setError]         = useState<string | null>(null)
+    const hasFetchedRef             = useRef(false)
 
     useEffect(() => {
-        // If no user after a reasonable delay, redirect to login
-        if (user === null) {
-            const timer = setTimeout(() => {
-                router.push('/login')
-            }, 100)
-            return () => clearTimeout(timer)
-        }
+        if (!user || hasFetchedRef.current) return
+        setIsLoading(true)
+        postAPI.list()
+            .then((data) => { setPosts(data.items || []); hasFetchedRef.current = true })
+            .catch(() => setError('Failed to load posts'))
+            .finally(() => setIsLoading(false))
+    }, [user]) // eslint-disable-line react-hooks/exhaustive-deps
 
-        // If user is undefined (still loading), don't do anything yet
-        if (user === undefined) {
-            return
-        }
-
-        // User is loaded and authenticated, fetch posts
-        const fetchPosts = async () => {
-            try {
-                setIsLoading(true)
-                const data = await postAPI.list()
-                setPosts(data.items || [])
-            } catch (error) {
-                console.error('Failed to fetch posts:', error)
-                setError('Failed to load posts')
-            } finally {
-                setIsLoading(false)
-            }
-        }
-
-        fetchPosts()
-    }, [user])
-
-    if (user === undefined || user === null || isLoading) {
+    if (isLoading) {
         return (
-            <div className="flex justify-center items-center min-h-screen">
+            <div className="flex flex-1 items-center justify-center">
                 <LoadingSpinner message="Loading dashboard..." />
             </div>
         )
@@ -56,101 +89,89 @@ export default function DashboardPage() {
 
     if (error) {
         return (
-            <div className="flex justify-center items-center min-h-screen">
-                <div className="bg-red-50 border border-red-200 rounded-lg p-4 max-w-md">
-                    <h2 className="text-red-800 font-semibold">Error</h2>
-                    <p className="text-red-700">{error}</p>
-                    <button
-                        onClick={() => window.location.reload()}
-                        className="mt-4 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
-                    >
-                        Retry
-                    </button>
+            <div className="flex flex-1 items-center justify-center px-4">
+                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-6 max-w-sm text-center space-y-3">
+                    <AlertCircleIcon className="h-8 w-8 text-rose-400 mx-auto" />
+                    <h2 className="font-semibold">Something went wrong</h2>
+                    <p className="text-sm text-muted-foreground">{error}</p>
+                    <Button size="sm" variant="outline" onClick={() => window.location.reload()}
+                        className="border-rose-500/30 text-rose-400 hover:bg-rose-500/10">
+                        Try again
+                    </Button>
                 </div>
             </div>
         )
     }
 
-    const postedCount = posts.filter((p) => p.status === 'posted').length
-    const scheduledCount = posts.filter(
-        (p) => p.status === 'scheduled'
-    ).length
-    const failedCount = posts.filter((p) => p.status === 'failed').length
+    const postedCount    = posts.filter((p) => p.status === 'posted').length
+    const scheduledCount = posts.filter((p) => p.status === 'scheduled').length
+    const failedCount    = posts.filter((p) => p.status === 'failed').length
+    const recentPosts    = posts.slice(0, 6)
+    const firstName      = user?.name?.split(' ')[0] ?? 'there'
 
     return (
-        <main className="max-w-6xl mx-auto px-4 py-8">
-            <div className="mb-8">
-                <h1 className="text-4xl font-bold text-gray-900 mb-2">
-                    Welcome, {user.name}!
-                </h1>
-                <p className="text-gray-600">Manage your automated LinkedIn posts</p>
+        <>
+            {/* Welcome banner */}
+            <div className="flex flex-col gap-1 px-4 lg:px-6">
+                <div className="flex items-center gap-2">
+                    <SparklesIcon className="h-5 w-5 text-primary shrink-0" />
+                    <h2 className="text-xl font-semibold tracking-tight">
+                        Welcome back,{' '}
+                        <span className="bg-gradient-to-r from-cyan-300 via-primary to-fuchsia-300 bg-clip-text text-transparent">
+                            {firstName}
+                        </span>
+                    </h2>
+                </div>
+                <p className="text-sm text-muted-foreground pl-7">
+                    Here's what's happening with your LinkedIn automation today.
+                </p>
             </div>
 
-            {/* Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                <div className="bg-white rounded-lg shadow p-6">
-                    <p className="text-gray-600 font-medium">Posted</p>
-                    <p className="text-3xl font-bold text-green-600">{postedCount}</p>
-                </div>
-                <div className="bg-white rounded-lg shadow p-6">
-                    <p className="text-gray-600 font-medium">Scheduled</p>
-                    <p className="text-3xl font-bold text-blue-600">
-                        {scheduledCount}
-                    </p>
-                </div>
-                <div className="bg-white rounded-lg shadow p-6">
-                    <p className="text-gray-600 font-medium">Failed</p>
-                    <p className="text-3xl font-bold text-red-600">{failedCount}</p>
-                </div>
-            </div>
+            {/* Stats cards */}
+            <SectionCards stats={{ total: posts.length, posted: postedCount, scheduled: scheduledCount, failed: failedCount }} />
 
-            {/* Quick Actions */}
-            <div className="mb-8">
-                <Link
-                    href="/dashboard/create"
-                    className="inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 font-medium"
-                >
-                    Create New Post
-                </Link>
-            </div>
+            {/* Chart + Recent Posts */}
+            <div className="grid gap-4 px-4 lg:px-6 lg:grid-cols-2">
+                <ChartAreaInteractive />
 
-            {/* Recent Posts */}
-            <div className="bg-white rounded-lg shadow p-6">
-                <h2 className="text-2xl font-bold text-gray-900 mb-4">
-                    Recent Posts
-                </h2>
-
-                {posts.length === 0 ? (
-                    <p className="text-gray-600 text-center py-8">
-                        No posts yet. Start by creating one!
-                    </p>
-                ) : (
-                    <div className="space-y-4">
-                        {posts.slice(0, 5).map((post) => (
-                            <div
-                                key={post._id}
-                                className="border-l-4 border-blue-600 pl-4 py-2"
-                            >
-                                <div className="flex justify-between items-start">
-                                    <p className="text-gray-800 line-clamp-2">
-                                        {post.content}
-                                    </p>
-                                    <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                                        {post.status}
-                                    </span>
-                                </div>
+                <Card className="border-border/50 flex flex-col">
+                    <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <CardTitle className="text-base">Recent Posts</CardTitle>
+                                <CardDescription className="text-xs mt-0.5">Latest activity across your queue</CardDescription>
                             </div>
-                        ))}
-                    </div>
-                )}
-
-                <Link
-                    href="/dashboard/posts"
-                    className="inline-block mt-4 text-blue-600 hover:text-blue-700 font-medium"
-                >
-                    View All Posts →
-                </Link>
+                            <Link href="/dashboard/posts">
+                                <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs text-muted-foreground hover:text-foreground">
+                                    View all <ArrowRightIcon className="h-3 w-3" />
+                                </Button>
+                            </Link>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="flex-1 space-y-2 pt-0">
+                        {recentPosts.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
+                                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 border border-primary/20">
+                                    <FileTextIcon className="h-5 w-5 text-primary" />
+                                </div>
+                                <div>
+                                    <p className="text-sm font-medium">No posts yet</p>
+                                    <p className="text-xs text-muted-foreground mt-0.5">Create your first LinkedIn post to get started.</p>
+                                </div>
+                                <Link href="/dashboard/create">
+                                    <Button size="sm" className="mt-1 gap-1.5">
+                                        <PlusIcon className="h-3.5 w-3.5" /> Create Post
+                                    </Button>
+                                </Link>
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {recentPosts.map((post) => <PostRow key={post._id} post={post} />)}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
             </div>
-        </main>
+        </>
     )
 }

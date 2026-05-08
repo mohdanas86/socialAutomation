@@ -728,6 +728,95 @@ async def get_post_stats(
     }
 
 
+
+# ===========================
+# Dashboard Stats Endpoint
+# ===========================
+
+
+@router.get("/api/dashboard/stats", response_model=dict)
+async def get_dashboard_stats(
+    days: int = Query(90, ge=7, le=365, description="Number of days to look back"),
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Aggregated post activity for the dashboard bar chart.
+    Groups posts by ISO week → { week, published, scheduled, failed }.
+    Fast: projects only status + created_at; no heavy aggregation pipeline.
+    """
+    import datetime as _dt
+    from collections import defaultdict
+    from app.db.mongodb import get_database
+
+    MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    try:
+        db       = get_database()
+        since    = datetime.utcnow() - timedelta(days=days)
+
+        cursor = db["posts"].find(
+            {"user_id": current_user, "created_at": {"$gte": since}},
+            {"status": 1, "created_at": 1, "_id": 0},
+        )
+        posts = await cursor.to_list(length=None)
+
+        # ── Totals ────────────────────────────────────────────────
+        totals = {"published": 0, "scheduled": 0, "failed": 0, "draft": 0}
+        for p in posts:
+            s = p.get("status", "draft")
+            if s == "posted":
+                totals["published"] += 1
+            elif s in totals:
+                totals[s] += 1
+
+        # ── Weekly grouping ───────────────────────────────────────
+        weekly: dict = defaultdict(lambda: {"published": 0, "scheduled": 0, "failed": 0})
+
+        for p in posts:
+            raw = p.get("created_at")
+            # Coerce to datetime regardless of storage type
+            if isinstance(raw, _dt.datetime):
+                created = raw
+            elif isinstance(raw, str):
+                try:
+                    created = _dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+            else:
+                continue
+
+            iso = created.isocalendar()          # (iso_year, iso_week, iso_weekday)
+            key = (iso[0], iso[1])               # use ISO year, not calendar year
+
+            s = p.get("status", "draft")
+            if s == "posted":
+                weekly[key]["published"] += 1
+            elif s == "scheduled":
+                weekly[key]["scheduled"] += 1
+            elif s == "failed":
+                weekly[key]["failed"] += 1
+
+        # ── Build chart list ──────────────────────────────────────
+        chart = []
+        for (iso_year, week_num) in sorted(weekly.keys()):
+            monday = _dt.datetime.strptime(
+                f"{iso_year}-W{week_num:02d}-1", "%G-W%V-%u"
+            )
+            week_of_month = (monday.day - 1) // 7 + 1
+            label = f"{MONTH_ABBR[monday.month - 1]} W{week_of_month}"
+            chart.append({"week": label, **weekly[(iso_year, week_num)]})
+
+        return {"chart": chart, "totals": totals}
+
+    except Exception as e:
+        logger.error(f"Dashboard stats error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch dashboard stats: {str(e)}",
+        )
+
+
 # ===========================
 # Debug Endpoints
 # ===========================

@@ -92,4 +92,15 @@ export const postAPI = {
     },
 }
 
+// Dashboard API
+export const dashboardAPI = {
+    getStats: async (days: 7 | 30 | 90 = 90) => {
+        const response = await client.get('/api/dashboard/stats', { params: { days } })
+        return response.data as {
+            chart: { week: string; published: number; scheduled: number; failed: number }[]
+            totals: { published: number; scheduled: number; failed: number; draft: number }
+        }
+    },
+}
+
 export default client

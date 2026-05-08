@@ -1,0 +1,82 @@
+[
+  {
+    "id": 1,
+    "content": "Excited to share that we've just launched our new AI-powered content scheduler! 🚀",
+    "status": "posted",
+    "scheduled_time": "2024-06-01T09:00:00Z",
+    "created_at": "2024-05-30T10:00:00Z",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": 2,
+    "content": "5 productivity hacks that changed how I work remotely — a thread 🧵",
+    "status": "posted",
+    "scheduled_time": "2024-06-02T10:00:00Z",
+    "created_at": "2024-05-31T08:00:00Z",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": 3,
+    "content": "The future of B2B marketing is authenticity. Here's why I stopped writing polished posts.",
+    "status": "scheduled",
+    "scheduled_time": "2024-06-10T08:30:00Z",
+    "created_at": "2024-06-03T11:00:00Z",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": 4,
+    "content": "Just crossed 10,000 followers on LinkedIn! Thank you all for the support ❤️",
+    "status": "posted",
+    "scheduled_time": "2024-06-04T14:00:00Z",
+    "created_at": "2024-06-03T09:00:00Z",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": 5,
+    "content": "My top 3 tools for growing a personal brand in 2024 without spending a dime.",
+    "status": "scheduled",
+    "scheduled_time": "2024-06-12T09:00:00Z",
+    "created_at": "2024-06-05T07:00:00Z",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": 6,
+    "content": "Why most LinkedIn posts fail — and what to do instead.",
+    "status": "failed",
+    "scheduled_time": "2024-06-06T11:00:00Z",
+    "created_at": "2024-06-05T12:00:00Z",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": 7,
+    "content": "New blog post: How to automate your LinkedIn outreach without losing the human touch.",
+    "status": "posted",
+    "scheduled_time": "2024-06-07T10:00:00Z",
+    "created_at": "2024-06-06T08:00:00Z",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": 8,
+    "content": "The one question I ask before every post that tripled my engagement.",
+    "status": "scheduled",
+    "scheduled_time": "2024-06-15T08:00:00Z",
+    "created_at": "2024-06-07T09:00:00Z",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": 9,
+    "content": "Lessons from building in public for 6 months. The good, the bad, the unexpected.",
+    "status": "posted",
+    "scheduled_time": "2024-06-08T10:00:00Z",
+    "created_at": "2024-06-07T10:00:00Z",
+    "platform": "LinkedIn"
+  },
+  {
+    "id": 10,
+    "content": "Hiring! We're looking for a senior full-stack engineer who loves automation.",
+    "status": "draft",
+    "scheduled_time": null,
+    "created_at": "2024-06-09T11:00:00Z",
+    "platform": "LinkedIn"
+  }
+]
