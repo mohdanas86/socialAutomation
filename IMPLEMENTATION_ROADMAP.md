@@ -1,7 +1,7 @@
 # Social Media Automation Platform - Complete Implementation Roadmap
 
-**Status**: MVP Backend Structure Complete
-**Current Phase**: Ready for Implementation
+**Status**: MVP Built (Auth + Posting + Dashboard)
+**Current Phase**: Stabilization and Testing
 **Date Created**: May 8, 2026
 
 ---
@@ -41,26 +41,7 @@ This document outlines **every step** needed to build a fully functional social 
 
 ### HOW
 
-**1. Update `auth_service.py` to handle token exchange:**
-
-Add method to exchange OAuth code for token:
-
-```python
-async def exchange_code_for_token(code: str) -> Dict:
-    """Exchange OAuth authorization code for access token."""
-    
-    # Call LinkedIn token endpoint
-    # POST https://www.linkedin.com/oauth/v2/accessToken
-    # Parameters: grant_type, code, redirect_uri, client_id, client_secret
-    # Returns: access_token, expires_in
-```
-
-**2. Install required library:**
-```bash
-pip install requests-oauthlib
-```
-
-**3. Implement in `auth_service.py`:**
+**1. Implement in `auth_service.py`:**
 
 ```python
 import aiohttp
@@ -70,272 +51,53 @@ from typing import Dict
 async def exchange_oauth_code_for_token(code: str) -> Dict:
     """
     Exchange LinkedIn OAuth code for access token.
-    
-    This is Step 2 of OAuth flow:
-    1. User logs in on LinkedIn (done by user)
-    2. LinkedIn redirects with code (browser handles)
-    3. WE exchange code for token (THIS FUNCTION)
-    4. User gets JWT token
-    """
-    try:
-        # LinkedIn token endpoint
-        url = "https://www.linkedin.com/oauth/v2/accessToken"
-        
-        payload = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": settings.linkedin_redirect_uri,
-            "client_id": settings.linkedin_client_id,
-            "client_secret": settings.linkedin_client_secret,
-        }
-        
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        }
-        
-        # Make async HTTP request
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=payload, headers=headers) as response:
-                if response.status != 200:
-                    error_data = await response.json()
-                    raise Exception(f"LinkedIn error: {error_data}")
-                
-                token_data = await response.json()
-                
-                return {
-                    "access_token": token_data["access_token"],
-                    "expires_in": token_data["expires_in"],
-                }
-    
-    except Exception as e:
-        logger.error(f"OAuth token exchange failed: {str(e)}")
-        raise
-```
-
-**4. Get user profile from LinkedIn:**
-
-Add method to fetch LinkedIn user profile:
+**Use the current `publish_to_linkedin` in `app/scheduler/scheduler.py`:**
 
 ```python
-@staticmethod
-async def get_linkedin_profile(access_token: str) -> Dict:
-    """
-    Fetch user profile from LinkedIn API.
-    
-    LinkedIn returns: id, localizedFirstName, localizedLastName, profilePicture, email
-    """
-    try:
-        url = "https://api.linkedin.com/v2/me"
-        
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
-                if response.status != 200:
-                    raise Exception(f"LinkedIn profile fetch failed: {response.status}")
-                
-                profile = await response.json()
-                
-                return {
-                    "linkedin_id": profile["id"],
-                    "first_name": profile["localizedFirstName"],
-                    "last_name": profile["localizedLastName"],
-                }
-    
-    except Exception as e:
-        logger.error(f"Failed to fetch LinkedIn profile: {str(e)}")
-        raise
+async def publish_to_linkedin(
+  access_token: str,
+  linkedin_member_id: str,
+  content: str,
+) -> dict:
+  url = "https://api.linkedin.com/v2/ugcPosts"
 
-
-@staticmethod
-async def get_linkedin_email(access_token: str) -> str:
-    """
-    Fetch email from LinkedIn (requires email permission scope).
-    """
-    try:
-        url = "https://api.linkedin.com/v2/emailAddress?q=primary&projection=(elements*(handle~))"
-        
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
-                if response.status != 200:
-                    # If this fails, use placeholder
-                    return "user@linkedin.com"
-                
-                email_data = await response.json()
-                email = email_data["elements"][0]["handle~"]["emailAddress"]
-                
-                return email
-    
-    except Exception as e:
-        logger.warning(f"Could not fetch email from LinkedIn: {str(e)}")
-        return None
-```
-
-**5. Update routes.py `/auth/callback` endpoint:**
-
-```python
-from datetime import datetime, timedelta
-
-@router.get("/auth/callback")
-async def oauth_callback(code: str, state: Optional[str] = None):
-    """
-    OAuth callback handler - called when user returns from LinkedIn.
-    
-    Flow:
-    1. Exchange code for LinkedIn access token
-    2. Fetch LinkedIn user profile
-    3. Create/update user in MongoDB
-    4. Generate JWT token
-    5. Return JWT to frontend
-    """
-    try:
-        logger.info("OAuth callback initiated")
-        
-        # Step 1: Exchange code for LinkedIn token
-        token_response = await AuthService.exchange_oauth_code_for_token(code)
-        linkedin_access_token = token_response["access_token"]
-        expires_in = token_response["expires_in"]
-        
-        # Step 2: Fetch user profile
-        profile = await AuthService.get_linkedin_profile(linkedin_access_token)
-        email = await AuthService.get_linkedin_email(linkedin_access_token)
-        
-        # Step 3: Calculate token expiry
-        token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
-        
-        # Step 4: Create/update user in database
-        full_name = f"{profile['first_name']} {profile['last_name']}"
-        user = await AuthService.get_or_create_user(
-            email=email or f"user_{profile['linkedin_id']}@linkedin.com",
-            name=full_name,
-            linkedin_id=profile["linkedin_id"],
-            linkedin_access_token=linkedin_access_token,
-            token_expiry=token_expiry,
-        )
-        
-        # Step 5: Generate JWT token
-        jwt_token = AuthService.create_access_token(str(user["_id"]))
-        
-        logger.info(f"User authenticated: {user['_id']}")
-        
-        # Step 6: Return response (frontend will store JWT)
-        return LoginResponse(
-            access_token=jwt_token,
-            token_type="bearer",
-            user=AuthService.convert_user_to_response(user),
-        )
-    
-    except Exception as e:
-        logger.error(f"OAuth callback failed: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"OAuth callback failed: {str(e)}",
-        )
-```
-
-### MANUAL TESTING
-
-**Test 1: Get OAuth Login URL**
-```bash
-# Request
-curl http://localhost:8000/auth/linkedin/url
-
-# Expected Response
-{
-  "login_url": "https://www.linkedin.com/oauth/v2/authorization?..."
-}
-
-# Verify: URL should contain your client_id and redirect_uri
-```
-
-**Test 2: Test OAuth Callback (Simulated)**
-```bash
-# In real use: user clicks login → LinkedIn → redirects to callback
-# For testing: manually construct callback URL
-
-# URL format
-http://localhost:8000/auth/callback?code=AQXXXX&state=STATE123
-
-# Expected Response
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer",
-  "user": {
-    "id": "507f1f77bcf86cd799439011",
-    "email": "user@example.com",
-    "name": "John Doe",
-    "linkedin_id": "12345",
-    "created_at": "2026-05-08T10:00:00"
+  headers = {
+    "Authorization": f"Bearer {access_token}",
+    "Content-Type": "application/json",
+    "X-Restli-Protocol-Version": "2.0.0",
   }
-}
+
+  author_urn = (
+    linkedin_member_id
+    if linkedin_member_id.startswith("urn:li:")
+    else f"urn:li:person:{linkedin_member_id}"
+  )
+
+  payload = {
+    "author": author_urn,
+    "lifecycleState": "PUBLISHED",
+    "specificContent": {
+      "com.linkedin.ugc.ShareContent": {
+        "shareCommentary": {"text": content},
+        "shareMediaCategory": "NONE",
+      }
+    },
+    "visibility": {
+      "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
+    }
+  }
 ```
 
-**Test 3: Verify User Created in MongoDB**
-```bash
-# Connect to MongoDB
-mongosh "mongodb+srv://dev:password@cluster.mongodb.net/social_automation"
-
-# Check users collection
-db.users.find()
-
-# Expected: User document with linkedin_id, access_token, token_expiry
-```
-
-**Test 4: Verify JWT Token is Valid**
-```bash
-# Use the returned access_token
-TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-
-# Try to get current user
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/me
-
-# Expected Response
-{
-  "id": "507f1f77bcf86cd799439011",
-  "email": "user@example.com",
-  "name": "John Doe",
-  "linkedin_id": "12345",
-  "created_at": "2026-05-08T10:00:00"
-}
-```
-
-**Test 5: Token Expiration Test**
-```bash
-# Use an expired token
-curl -H "Authorization: Bearer expired_token_here" http://localhost:8000/api/me
-
-# Expected Response (401)
-{
-  "error": "Invalid or expired token",
-  "status_code": 401
-}
-```
-
----
-
-## Step 1.2: Implement LinkedIn OAuth URL Generation
-
-### WHY
-- Frontend needs a link to send users to LinkedIn login
-- This generates the proper OAuth URL with all required parameters
-- User clicks link → gets redirected to LinkedIn login
-
-### HOW
-
-**Update `routes.py`:**
+**In `publish_post_job`, use `linkedin_member_id` or `linkedin_id` fallback:**
 
 ```python
-@router.get("/auth/linkedin/url")
-async def get_linkedin_oauth_url():
+member_id = user.get("linkedin_member_id") or user.get("linkedin_id")
+result = await publish_to_linkedin(
+  access_token=user["linkedin_access_token"],
+  linkedin_member_id=member_id,
+  content=post["content"],
+)
+```
     """
     Get LinkedIn OAuth login URL for frontend.
     
@@ -351,10 +113,9 @@ async def get_linkedin_oauth_url():
             "response_type": "code",
             "client_id": settings.linkedin_client_id,
             "redirect_uri": settings.linkedin_redirect_uri,
-            "scope": "r_basicprofile r_emailaddress w_member_social",
+            "scope": "openid profile email w_member_social",
             # scope breakdown:
-            # r_basicprofile = Read basic profile (name, profile)
-            # r_emailaddress = Read email address
+            # openid/profile/email = OpenID Connect user identity
             # w_member_social = Write to member social feed (POST)
             "state": secrets.token_urlsafe(32),  # CSRF protection
         }
@@ -1138,18 +899,15 @@ db.posts.findOne({...}).last_error
 
 ### HOW
 
-**Create Next.js project:**
+**Current Next.js project (already created):**
 
 ```bash
 # In parent directory
-npm create next-app@latest frontend -- --typescript --tailwind
-
-# Install additional dependencies
-cd frontend
+cd front
 npm install axios zustand js-cookie
 
 # Structure
-frontend/
+front/
 ├── app/
 │   ├── layout.tsx
 │   ├── page.tsx              # Landing page
@@ -1201,44 +959,46 @@ npm run dev
 
 ### HOW
 
-**Create `frontend/lib/api.ts`:**
+**Create `front/lib/api.ts`:**
 
 ```typescript
-import axios from 'axios';
+import axios from 'axios'
+import Cookie from 'js-cookie'
+import { useAuthStore } from './store'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-});
+  headers: { 'Content-Type': 'application/json' },
+})
 
 // Add JWT token to requests
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('jwt_token');
+  const token = Cookie.get('token') || useAuthStore.getState().token
   if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+    config.headers.Authorization = `Bearer ${token}`
   }
-  return config;
-});
+  return config
+})
 
 export const authAPI = {
   getLoginUrl: () => api.get('/auth/linkedin/url'),
-  callback: (code: string) => api.get('/auth/callback', { params: { code } }),
-};
+}
 
 export const postAPI = {
   create: (data: any) => api.post('/api/posts', data),
-  list: () => api.get('/api/posts'),
+  list: (params?: any) => api.get('/api/posts', { params }),
   get: (id: string) => api.get(`/api/posts/${id}`),
   delete: (id: string) => api.delete(`/api/posts/${id}`),
-};
+}
 
 export const userAPI = {
   getMe: () => api.get('/api/me'),
-};
+}
 ```
 
-**Create `frontend/app/login/page.tsx`:**
+**Create `front/app/login/page.tsx`:**
 
 ```typescript
 'use client';
@@ -1298,61 +1058,19 @@ export default function LoginPage() {
 }
 ```
 
-**Create OAuth callback handler:**
+**OAuth callback (current flow):**
 
-`frontend/app/api/auth/callback/route.ts`:
-
-```typescript
-import { NextRequest, NextResponse } from 'next/server';
-
-export async function GET(request: NextRequest) {
-  const code = request.nextUrl.searchParams.get('code');
-  const state = request.nextUrl.searchParams.get('state');
-
-  if (!code) {
-    return NextResponse.redirect(
-      new URL('/login?error=missing_code', request.url)
-    );
-  }
-
-  try {
-    // Call backend to exchange code for token
-    const response = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/auth/callback`,
-      {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error('OAuth callback failed');
-    }
-
-    const data = await response.json();
-    const { access_token } = data;
-
-    // Redirect to dashboard with token in URL
-    // Frontend will store it in localStorage
-    return NextResponse.redirect(
-      new URL(`/dashboard?token=${access_token}`, request.url)
-    );
-  } catch (error) {
-    console.error('OAuth callback error:', error);
-    return NextResponse.redirect(
-      new URL('/login?error=callback_failed', request.url)
-    );
-  }
-}
-```
+- Backend `/auth/callback` exchanges code and redirects to
+  `/dashboard?token=JWT`.
+- `front/components/Providers.tsx` reads `token` from the URL, stores it in
+  cookies, and fetches `/api/me` before rendering.
 
 ### MANUAL TESTING
 
 **Test 1: Login Flow**
 ```bash
 # Start frontend
+cd front
 npm run dev
 
 # Go to http://localhost:3000/login
@@ -1363,8 +1081,8 @@ npm run dev
 **Test 2: Token Storage**
 ```bash
 # Open browser DevTools (F12)
-# Go to Application → Local Storage
-# Should see jwt_token with value from backend
+# Go to Application → Cookies
+# Should see token with value from backend
 
 # Verify token is valid
 # Go to http://localhost:8000/docs
@@ -1383,7 +1101,7 @@ npm run dev
 
 ### HOW
 
-**Create `frontend/components/PostCard.tsx`:**
+**Create `front/components/PostCard.tsx`:**
 
 ```typescript
 'use client';
@@ -1476,7 +1194,7 @@ export default function PostCard({ post, onDelete }: PostCardProps) {
 }
 ```
 
-**Create `frontend/components/CreatePostForm.tsx`:**
+**Create `front/components/CreatePostForm.tsx`:**
 
 ```typescript
 'use client';
@@ -1573,84 +1291,11 @@ export default function CreatePostForm({ onSuccess }: CreatePostFormProps) {
 }
 ```
 
-**Create `frontend/app/dashboard/page.tsx`:**
+**Create `front/app/dashboard/page.tsx`:**
 
-```typescript
-'use client';
-
-import { useEffect, useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
-import { postAPI, userAPI } from '@/lib/api';
-import CreatePostForm from '@/components/CreatePostForm';
-import PostCard from '@/components/PostCard';
-
-export default function Dashboard() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const [user, setUser] = useState<any>(null);
-  const [posts, setPosts] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    // Get token from URL or localStorage
-    const token = searchParams.get('token');
-    if (token) {
-      localStorage.setItem('jwt_token', token);
-    }
-
-    if (!localStorage.getItem('jwt_token')) {
-      router.push('/login');
-      return;
-    }
-
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    try {
-      const [userRes, postsRes] = await Promise.all([
-        userAPI.getMe(),
-        postAPI.list(),
-      ]);
-
-      setUser(userRes.data);
-      setPosts(postsRes.data.items);
-    } catch (error) {
-      console.error('Failed to fetch data:', error);
-      localStorage.removeItem('jwt_token');
-      router.push('/login');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
-    return <div className="text-center mt-10">Loading...</div>;
-  }
-
-  return (
-    <div className="max-w-4xl mx-auto p-6">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">Welcome, {user?.name}!</h1>
-        <p className="text-gray-600">Manage your LinkedIn posts</p>
-      </div>
-
-      <CreatePostForm onSuccess={fetchData} />
-
-      <div>
-        <h2 className="text-2xl font-bold mb-4">Your Posts</h2>
-        {posts.length === 0 ? (
-          <p className="text-gray-600">No posts yet. Create one above!</p>
-        ) : (
-          posts.map((post) => (
-            <PostCard key={post.id} post={post} onDelete={fetchData} />
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-```
+Current dashboard uses `useAuthStore` + `usePostStore` and relies on
+`front/components/Providers.tsx` to initialize auth from the `token` query
+parameter and cookies before rendering.
 
 ### MANUAL TESTING
 
@@ -1700,7 +1345,7 @@ python -m uvicorn app.main:app --reload
 # Expected: Server starts on http://localhost:8000
 
 # Step 2: Start frontend
-cd frontend
+cd front
 npm run dev
 
 # Expected: Frontend on http://localhost:3000
@@ -2159,7 +1804,7 @@ LINKEDIN_CLIENT_ID=...
 LINKEDIN_CLIENT_SECRET=...
 JWT_SECRET_KEY=...
 
-# 8. Update frontend .env with production API URL
+# 8. Update front .env with production API URL
 NEXT_PUBLIC_API_URL=https://your-railway-url.railway.app
 
 # 9. Deploy frontend (Vercel recommended)
