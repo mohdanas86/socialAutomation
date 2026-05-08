@@ -21,7 +21,7 @@ STRUCTURE:
 - Post CRUD endpoints (all require auth)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -52,12 +52,14 @@ router = APIRouter()
 # ===========================
 
 
-async def get_current_user(token: Optional[str] = None) -> str:
+async def get_current_user(authorization: Optional[str] = Header(None)) -> str:
     """
     Dependency to verify JWT token and extract user ID.
 
     This is called on every protected endpoint.
     If token is invalid/missing, raises 401 Unauthorized.
+
+    Extracts token from Authorization header format: "Bearer <token>"
 
     Usage:
         @app.post("/api/posts")
@@ -68,7 +70,7 @@ async def get_current_user(token: Optional[str] = None) -> str:
             ...
 
     Args:
-        token: JWT token from Authorization header
+        authorization: Authorization header with format "Bearer <token>"
 
     Returns:
         User ID if token valid
@@ -76,10 +78,22 @@ async def get_current_user(token: Optional[str] = None) -> str:
     Raises:
         HTTPException: If token missing/invalid
     """
-    if not token:
+    if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Extract token from "Bearer <token>" format
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise ValueError("Invalid authentication scheme")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication header format",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -137,10 +151,11 @@ async def get_linkedin_oauth_url():
     4. User logs in on LinkedIn
     5. LinkedIn redirects back to /auth/callback with authorization code
     
-    Scopes explained:
-    - r_liteprofile: Read basic profile info (name, picture)
+    Scopes explained (LinkedIn API v2):
+    - openid: Required for OAuth2 flow
+    - profile: Read basic profile info (name, picture)
+    - email: Read email address
     - w_member_social: Write to member's social feed (create posts)
-    - r_emailaddress: Read email address (optional but recommended)
 
     Returns:
         Dict with "login_url" to redirect user to
@@ -157,7 +172,7 @@ async def get_linkedin_oauth_url():
             "response_type": "code",
             "client_id": settings.linkedin_client_id,
             "redirect_uri": settings.linkedin_redirect_uri,
-            "scope": "r_liteprofile w_member_social r_emailaddress",
+            "scope": "openid profile email w_member_social",  # Full scopes: login + posting
             "state": state,  # CSRF protection
         }
         
@@ -166,7 +181,7 @@ async def get_linkedin_oauth_url():
         logger.info("OAuth URL generated")
         
         return {
-            "login_url": login_url,
+            "url": login_url,
             "client_id": settings.linkedin_client_id,
         }
     
@@ -179,7 +194,12 @@ async def get_linkedin_oauth_url():
 
 
 @router.get("/auth/callback")
-async def oauth_callback(code: str, state: Optional[str] = None):
+async def oauth_callback(
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+):
     """
     OAuth callback handler - called when user returns from LinkedIn.
 
@@ -198,39 +218,58 @@ async def oauth_callback(code: str, state: Optional[str] = None):
     Args:
         code: Authorization code from LinkedIn
         state: CSRF token (security check)
+        error: Error code if authorization failed (e.g., invalid_scope_error)
+        error_description: Error description from LinkedIn
 
     Returns:
         Redirects to frontend dashboard with token
     """
     try:
+        # Handle OAuth errors from LinkedIn
+        if error:
+            error_msg = f"{error}: {error_description}" if error_description else error
+            logger.error(f"OAuth callback error from LinkedIn: {error_msg}")
+            from fastapi.responses import RedirectResponse
+            frontend_url = settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
+            redirect_url = f"{frontend_url}/?error={error_msg}"
+            return RedirectResponse(url=redirect_url)
+        
+        if not code:
+            logger.error("OAuth callback received without code or error")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing authorization code",
+            )
+        
         logger.info(f"OAuth callback received with code: {code[:10]}...")
         
-        # Step 1: Exchange code for LinkedIn access token
+        # Step 1: Exchange code for LinkedIn access token + ID token
         token_response = await AuthService.exchange_oauth_code_for_token(code)
-        linkedin_access_token = token_response["access_token"]
-        expires_in = token_response["expires_in"]
+        linkedin_access_token = token_response.get("access_token")
+        id_token = token_response.get("id_token")
+        expires_in = token_response.get("expires_in", 3600)
         
-        # Step 2: Fetch user profile from LinkedIn
-        profile = await AuthService.get_linkedin_profile(linkedin_access_token)
-        email = await AuthService.get_linkedin_email(linkedin_access_token)
+        # Step 2: Decode ID token to get user profile (OpenID Connect)
+        # The id_token contains: sub (LinkedIn ID), given_name, family_name, email
+        profile_data = AuthService.decode_id_token(id_token)
         
         # Step 3: Calculate token expiry
         token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
         
         # Step 4: Create/update user in database
-        full_name = f"{profile['first_name']} {profile['last_name']}"
+        full_name = f"{profile_data['first_name']} {profile_data['last_name']}".strip()
         user = await AuthService.get_or_create_user(
-            email=email or f"user_{profile['linkedin_id']}@linkedin.com",
-            name=full_name,
-            linkedin_id=profile["linkedin_id"],
+            email=profile_data.get("email") or f"user_{profile_data['linkedin_id']}@linkedin.com",
+            name=full_name or "LinkedIn User",
+            linkedin_id=profile_data["linkedin_id"],
             linkedin_access_token=linkedin_access_token,
             token_expiry=token_expiry,
         )
         
-        # Step 5: Generate JWT token
+        # Step 5: Generate JWT token for our app
         jwt_token = AuthService.create_access_token(str(user["_id"]))
         
-        logger.info(f"✅ User authenticated: {user['_id']}")
+        logger.info(f"✅ User authenticated: {user['_id']} (LinkedIn: {profile_data['linkedin_id']})")
         
         # Step 6: Redirect to frontend with token
         # Frontend will store token and redirect to dashboard
@@ -254,7 +293,6 @@ async def oauth_callback(code: str, state: Optional[str] = None):
 
 @router.get("/api/me", response_model=UserResponse)
 async def get_current_user_info(
-    authorization: Optional[str] = None,
     current_user: str = Depends(get_current_user),
 ):
     """
@@ -296,7 +334,6 @@ async def get_current_user_info(
 @router.post("/api/posts", response_model=PostResponse, status_code=status.HTTP_201_CREATED)
 async def create_post(
     request: CreatePostRequest,
-    authorization: Optional[str] = None,
     current_user: str = Depends(get_current_user),
 ):
     """
@@ -367,7 +404,6 @@ async def create_post(
 
 @router.get("/api/posts", response_model=dict)
 async def list_posts(
-    authorization: Optional[str] = None,
     current_user: str = Depends(get_current_user),
     status_filter: Optional[str] = Query(None, alias="status"),
     skip: int = Query(0, ge=0),
@@ -442,7 +478,6 @@ async def list_posts(
 @router.get("/api/posts/{post_id}", response_model=PostResponse)
 async def get_post(
     post_id: str,
-    authorization: Optional[str] = None,
     current_user: str = Depends(get_current_user),
 ):
     """
@@ -501,7 +536,6 @@ async def get_post(
 async def update_post(
     post_id: str,
     request: UpdatePostRequest,
-    authorization: Optional[str] = None,
     current_user: str = Depends(get_current_user),
 ):
     """
@@ -595,7 +629,6 @@ async def delete_post(
 @router.post("/api/posts/{post_id}/retry", status_code=status.HTTP_200_OK)
 async def retry_failed_post(
     post_id: str,
-    authorization: Optional[str] = None,
     current_user: str = Depends(get_current_user),
 ):
     """
@@ -664,7 +697,6 @@ async def retry_failed_post(
 @router.get("/api/posts/{post_id}/stats", response_model=dict)
 async def get_post_stats(
     post_id: str,
-    authorization: Optional[str] = None,
     current_user: str = Depends(get_current_user),
 ):
     """

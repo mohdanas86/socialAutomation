@@ -8,7 +8,7 @@ pymongo==4.6.0
 
 # Async & Background Jobs
 apscheduler==3.10.4
-asyncio-contextmanager==1.0.0
+asyncio-contextmanager==1.0.1
 
 # Authentication & Security
 python-jose[cryptography]==3.3.0

@@ -243,11 +243,15 @@ class AuthService:
         3. WE exchange code for token (THIS FUNCTION)
         4. User gets JWT token for our app
         
+        With OpenID Connect scopes, LinkedIn returns:
+        - access_token: For API calls
+        - id_token: JWT with user info (name, email, sub)
+        
         Args:
             code: Authorization code from LinkedIn
             
         Returns:
-            Dict with "access_token" and "expires_in"
+            Dict with "access_token", "id_token", and "expires_in"
             
         Raises:
             Exception: If LinkedIn API fails
@@ -280,14 +284,58 @@ class AuthService:
                     token_data = await response.json()
                     
                     logger.info("Successfully exchanged OAuth code for token")
+                    logger.debug(f"Token response keys: {token_data.keys()}")
                     
                     return {
-                        "access_token": token_data["access_token"],
-                        "expires_in": token_data["expires_in"],
+                        "access_token": token_data.get("access_token"),
+                        "id_token": token_data.get("id_token"),  # OpenID Connect token with user info
+                        "expires_in": token_data.get("expires_in"),
                     }
         
         except Exception as e:
             logger.error(f"OAuth token exchange failed: {str(e)}")
+            raise
+
+    @staticmethod
+    def decode_id_token(id_token: str) -> Dict:
+        """
+        Decode LinkedIn's OpenID Connect ID token to extract user information.
+        
+        The id_token is a JWT that contains:
+        - sub: LinkedIn user ID
+        - given_name: First name
+        - family_name: Last name
+        - email: Email address
+        - picture: Profile picture URL
+        
+        Args:
+            id_token: JWT token from LinkedIn
+            
+        Returns:
+            Dict with user info extracted from token
+            
+        Raises:
+            Exception: If token is invalid
+        """
+        try:
+            from jose import jwt as jose_jwt
+            
+            # Decode without verification (LinkedIn's token is signed, we trust it)
+            # In production, verify signature against LinkedIn's public keys
+            payload = jose_jwt.get_unverified_claims(id_token)
+            
+            logger.info(f"Decoded ID token for LinkedIn user: {payload.get('sub')}")
+            
+            return {
+                "linkedin_id": payload.get("sub"),
+                "first_name": payload.get("given_name", "User"),
+                "last_name": payload.get("family_name", ""),
+                "email": payload.get("email"),
+                "picture": payload.get("picture"),
+            }
+        
+        except Exception as e:
+            logger.error(f"Failed to decode ID token: {str(e)}")
             raise
 
     @staticmethod
@@ -317,16 +365,26 @@ class AuthService:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
                     if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"LinkedIn profile fetch failed: {response.status} - {error_text}")
                         raise Exception(f"LinkedIn profile fetch failed: {response.status}")
                     
                     profile = await response.json()
                     
-                    logger.info(f"Fetched LinkedIn profile for user {profile['id']}")
+                    # Handle both v1 and v2 API response formats
+                    linkedin_id = profile.get("id") or profile.get("sub")
+                    first_name = profile.get("given_name") or profile.get("localizedFirstName", "User")
+                    last_name = profile.get("family_name") or profile.get("localizedLastName", "")
+                    
+                    if not linkedin_id:
+                        raise Exception("No LinkedIn ID found in profile response")
+                    
+                    logger.info(f"Fetched LinkedIn profile for user {linkedin_id}")
                     
                     return {
-                        "linkedin_id": profile["id"],
-                        "first_name": profile.get("localizedFirstName", "User"),
-                        "last_name": profile.get("localizedLastName", ""),
+                        "linkedin_id": linkedin_id,
+                        "first_name": first_name,
+                        "last_name": last_name,
                     }
         
         except Exception as e:
@@ -338,14 +396,19 @@ class AuthService:
         """
         Fetch email address from LinkedIn (requires email permission scope).
         
+        With the new LinkedIn OAuth scopes (openid profile email),
+        email is returned directly from the /v2/me endpoint.
+        This function is kept for backward compatibility and as fallback.
+        
         Args:
             access_token: LinkedIn access token
             
         Returns:
-            Email address or placeholder if failed
+            Email address or None if failed
         """
         try:
-            url = "https://api.linkedin.com/v2/emailAddress?q=primary&projection=(elements*(handle~))"
+            # Try the newer endpoint first (v2 with openid/email scopes)
+            url = "https://api.linkedin.com/v2/me"
             
             headers = {
                 "Authorization": f"Bearer {access_token}",
@@ -354,16 +417,28 @@ class AuthService:
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        profile = await response.json()
+                        if "email" in profile:
+                            logger.info("Fetched LinkedIn email from /v2/me")
+                            return profile["email"]
+            
+            # Fallback to old emailAddress endpoint
+            url = "https://api.linkedin.com/v2/emailAddress?q=primary&projection=(elements*(handle~))"
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
                     if response.status != 200:
                         logger.warning(f"Could not fetch email from LinkedIn: {response.status}")
                         return None
                     
                     email_data = await response.json()
-                    email = email_data["elements"][0]["handle~"]["emailAddress"]
+                    if "elements" in email_data and len(email_data["elements"]) > 0:
+                        email = email_data["elements"][0]["handle~"]["emailAddress"]
+                        logger.info("Fetched LinkedIn email from emailAddress endpoint")
+                        return email
                     
-                    logger.info(f"Fetched LinkedIn email")
-                    
-                    return email
+                    return None
         
         except Exception as e:
             logger.warning(f"Could not fetch email from LinkedIn: {str(e)}")
