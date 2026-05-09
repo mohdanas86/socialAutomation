@@ -113,7 +113,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> str:
 # ===========================
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health_check():
     """
     Health check endpoint.
