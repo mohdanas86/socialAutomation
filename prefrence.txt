@@ -1,0 +1,1 @@
+bg dark color: #141313, , card color: "#181617" or buttons, white text color for headings "#FEFEFF", subheadings "#343234", body text color: "#5F5958" use these in deasbors make things better and attractive not just funky color use these color schema

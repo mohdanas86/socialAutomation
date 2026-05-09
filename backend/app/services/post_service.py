@@ -23,7 +23,7 @@ Enterprise apps always separate:
 This keeps code organized, testable, and reusable.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, List
 from bson import ObjectId
 from app.utils.logger import get_logger
@@ -118,7 +118,10 @@ class PostService:
             PostService.validate_post_content(content)
 
             # Validate scheduled time is in future
-            if scheduled_time <= datetime.utcnow():
+            if scheduled_time.tzinfo is None:
+                # Treat naive datetime as UTC
+                scheduled_time = scheduled_time.replace(tzinfo=timezone.utc)
+            if scheduled_time <= datetime.now(timezone.utc):
                 raise ValueError("Scheduled time must be in the future")
 
             db = get_database()
@@ -246,7 +249,7 @@ class PostService:
                 raise ValueError("Cannot edit a post that's already been posted")
 
             # Build update
-            updates = {"updated_at": datetime.utcnow()}
+            updates = {"updated_at": datetime.now(timezone.utc)}
             if content:
                 updates["content"] = content.strip()
             if scheduled_time:
@@ -332,7 +335,7 @@ class PostService:
             db = get_database()
             posts_col = db["posts"]
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             # Find posts that should be posted now
             posts = []
@@ -377,11 +380,11 @@ class PostService:
 
             updates = {
                 "status": status.value,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
 
             if status == PostStatus.POSTED:
-                updates["posted_at"] = datetime.utcnow()
+                updates["posted_at"] = datetime.now(timezone.utc)
                 updates["linkedin_post_id"] = linkedin_post_id
 
             if error:
@@ -421,7 +424,7 @@ class PostService:
                 {"_id": ObjectId(post_id)},
                 {
                     "$inc": {"retry_count": 1},
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
                 return_document=True,
             )

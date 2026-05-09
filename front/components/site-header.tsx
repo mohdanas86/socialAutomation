@@ -20,7 +20,7 @@ interface SiteHeaderProps {
 
 export function SiteHeader({ title = "Dashboard", breadcrumb }: SiteHeaderProps) {
   return (
-    <header className="sticky top-0 z-50 flex h-14 shrink-0 items-center gap-2 border-b border-border/50 bg-background/80 backdrop-blur-sm transition-[width,height] ease-linear">
+    <header className="sticky top-0 z-50 flex py-3 shrink-0 items-center gap-2 border-b border-border/50 bg-background/80 backdrop-blur-sm transition-[width,height] ease-linear">
       <div className="flex w-full items-center gap-2 px-4 lg:gap-3 lg:px-6">
         <SidebarTrigger className="-ml-1 text-muted-foreground hover:text-foreground" />
         <Separator
@@ -62,8 +62,7 @@ export function SiteHeader({ title = "Dashboard", breadcrumb }: SiteHeaderProps)
           {/* Use Link wrapping Button — avoids the nativeButton/render prop warning */}
           <Link href="/dashboard/create">
             <Button
-              size="sm"
-              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/20"
+              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/20 rounded-sm border border-primary-border cursor-pointer"
             >
               <PlusIcon className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Create Post</span>

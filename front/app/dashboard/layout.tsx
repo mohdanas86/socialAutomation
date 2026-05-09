@@ -38,7 +38,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return (
         <SidebarProvider>
             <AppSidebar />
-            <div className="flex min-h-svh flex-1 flex-col bg-background">
+            <div className="flex min-h-svh flex-1 flex-col bg-[#141313]">
                 <SiteHeader />
                 <main className="flex flex-1 flex-col gap-6 py-6 @container/main">
                     {children}

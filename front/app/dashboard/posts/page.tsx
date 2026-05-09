@@ -39,11 +39,46 @@ const PAGE_SIZE = 12
 
 // ─── Status config ────────────────────────────────────────────
 const STATUS_CONFIG = {
-    posted:    { label: 'Published', icon: <CheckCircleIcon className="h-3.5 w-3.5" />, cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25' },
-    scheduled: { label: 'Scheduled', icon: <ClockIcon       className="h-3.5 w-3.5" />, cls: 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/25' },
-    failed:    { label: 'Failed',    icon: <AlertCircleIcon className="h-3.5 w-3.5" />, cls: 'bg-rose-500/15 text-rose-400 border-rose-500/25' },
-    draft:     { label: 'Draft',     icon: <FileTextIcon    className="h-3.5 w-3.5" />, cls: 'bg-muted/60 text-muted-foreground border-border' },
+    posted: { label: 'Published', icon: <CheckCircleIcon className="h-3.5 w-3.5" />, cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.1)]' },
+    scheduled: { label: 'Scheduled', icon: <ClockIcon className="h-3.5 w-3.5" />, cls: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40 shadow-[0_0_10px_rgba(217,70,239,0.1)]' },
+    failed: { label: 'Failed', icon: <AlertCircleIcon className="h-3.5 w-3.5" />, cls: 'bg-rose-500/20 text-rose-300 border-rose-500/40 shadow-[0_0_10px_rgba(244,63,94,0.1)]' },
+    draft: { label: 'Draft', icon: <FileTextIcon className="h-3.5 w-3.5" />, cls: 'bg-[#343234]/40 text-[#FEFEFF] border-[#343234] shadow-sm' },
 } as const
+
+/**
+ * Robustly parse any UTC datetime string from the API.
+ * Backend may send:
+ *   - "2026-05-09T01:28:00"       → naive UTC (no tz info) → append 'Z'
+ *   - "2026-05-09T01:28:00Z"      → already UTC with Z → parse as-is
+ *   - "2026-05-09T01:28:00+00:00" → UTC with offset → parse as-is
+ *   - "2026-05-09T01:28:00.000000" → naive with microseconds → append 'Z'
+ * JS Date treats strings without tz as LOCAL time — we must always force UTC.
+ */
+const toUtcDate = (s: string): Date => {
+    if (!s) return new Date(NaN)
+    // Already has explicit timezone info
+    if (s.endsWith('Z') || /[+\-]\d{2}:\d{2}$/.test(s)) {
+        return new Date(s)
+    }
+    // Naive datetime — must be UTC (backend always stores UTC)
+    return new Date(s + 'Z')
+}
+
+/**
+ * Format a UTC date string for display in the user's local timezone.
+ * Shows: "May 9, 06:58 AM IST" style.
+ */
+const formatTime = (s: string): string => {
+    const d = toUtcDate(s)
+    if (isNaN(d.getTime())) return 'Invalid date'
+    return d.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short',
+    })
+}
 
 // ─── Post Card ────────────────────────────────────────────────
 function PostCard({ post, onDelete, onRetry }: {
@@ -87,7 +122,7 @@ function PostCard({ post, onDelete, onRetry }: {
                     {cfg.icon} {cfg.label}
                 </span>
                 <span className="text-[11px] text-muted-foreground shrink-0">
-                    {formatDistanceToNow(new Date(post.created_at), { addSuffix: true })}
+                    {formatDistanceToNow(toUtcDate(post.created_at), { addSuffix: true })}
                 </span>
             </div>
 
@@ -101,10 +136,7 @@ function PostCard({ post, onDelete, onRetry }: {
                 <div className="flex items-center gap-1.5 rounded-md bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
                     <ClockIcon className="h-3 w-3 shrink-0" />
                     Scheduled:{' '}
-                    {new Date(post.scheduled_time).toLocaleString('en-US', {
-                        month: 'short', day: 'numeric',
-                        hour: '2-digit', minute: '2-digit',
-                    })}
+                    {formatTime(post.scheduled_time)}
                 </div>
             )}
 
@@ -113,10 +145,7 @@ function PostCard({ post, onDelete, onRetry }: {
                 <div className="flex items-center gap-1.5 rounded-md bg-emerald-500/5 px-2.5 py-1.5 text-[11px] text-emerald-400/80">
                     <CheckCircleIcon className="h-3 w-3 shrink-0" />
                     Published:{' '}
-                    {new Date(post.posted_at).toLocaleString('en-US', {
-                        month: 'short', day: 'numeric',
-                        hour: '2-digit', minute: '2-digit',
-                    })}
+                    {formatTime(post.posted_at!)}
                 </div>
             )}
 
@@ -170,12 +199,12 @@ function SkeletonCard() {
 export default function PostsPage() {
     const invalidate = useDashboardStatsStore((s) => s.invalidate)
 
-    const [posts, setPosts]         = useState<Post[]>([])
-    const [total, setTotal]         = useState(0)
-    const [filter, setFilter]       = useState<Filter>('all')
-    const [page, setPage]           = useState(1)
+    const [posts, setPosts] = useState<Post[]>([])
+    const [total, setTotal] = useState(0)
+    const [filter, setFilter] = useState<Filter>('all')
+    const [page, setPage] = useState(1)
     const [isLoading, setIsLoading] = useState(true)
-    const [error, setError]         = useState<string | null>(null)
+    const [error, setError] = useState<string | null>(null)
 
     // ── Fetch from API ─────────────────────────────────────────
     const fetchPosts = useCallback(async (f: Filter, p: number) => {
@@ -184,8 +213,8 @@ export default function PostsPage() {
         try {
             const data = await postAPI.list({
                 status: f !== 'all' ? f : undefined,
-                skip:   (p - 1) * PAGE_SIZE,
-                limit:  PAGE_SIZE,
+                skip: (p - 1) * PAGE_SIZE,
+                limit: PAGE_SIZE,
             })
             // API returns { items, total, page, per_page }
             setPosts(data.items ?? [])
@@ -259,11 +288,10 @@ export default function PostsPage() {
                     <button
                         key={tab}
                         onClick={() => handleFilterChange(tab)}
-                        className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                            filter === tab
+                        className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${filter === tab
                                 ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
                                 : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-                        }`}
+                            }`}
                     >
                         {tab === 'posted' ? 'Published' : tab.charAt(0).toUpperCase() + tab.slice(1)}
                     </button>

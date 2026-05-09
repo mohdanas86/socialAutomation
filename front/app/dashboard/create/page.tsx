@@ -14,6 +14,7 @@ import {
     CheckCircleIcon,
     AlertCircleIcon,
 } from 'lucide-react'
+import { DatePickerTime } from '@/components/date-picker-time'
 
 const MAX_CHARS = 3000
 const MIN_CHARS = 5
@@ -27,18 +28,30 @@ const TIPS = [
 ]
 
 export default function CreatePostPage() {
-    const router      = useRouter()
-    const addPost     = usePostStore((s) => s.addPost)
-    const invalidate  = useDashboardStatsStore((s) => s.invalidate)
+    const router = useRouter()
+    const addPost = usePostStore((s) => s.addPost)
+    const invalidate = useDashboardStatsStore((s) => s.invalidate)
 
-    const [content, setContent]         = useState('')
+    const [content, setContent] = useState('')
     const [scheduledTime, setScheduledTime] = useState('')
-    const [isLoading, setIsLoading]     = useState(false)
-    const [error, setError]             = useState<string | null>(null)
-    const [success, setSuccess]         = useState(false)
+    const [isLoading, setIsLoading] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const [success, setSuccess] = useState(false)
 
     const charCount = content.length
-    const isValid   = charCount >= MIN_CHARS && charCount <= MAX_CHARS
+    const isValid = charCount >= MIN_CHARS && charCount <= MAX_CHARS
+
+    /**
+     * Convert a datetime-local input value (e.g. "2026-05-09T12:30") to a proper
+     * ISO 8601 string with timezone offset (e.g. "2026-05-09T12:30:00+05:30").
+     * The browser datetime-local input gives LOCAL time with no tz info.
+     * We must tell the backend what timezone it was entered in.
+     */
+    const localToIso = (localStr: string): string => {
+        if (!localStr) return localStr
+        const d = new Date(localStr)   // JS treats naked string as local time ✓
+        return d.toISOString()         // Always produces UTC "Z" ISO string
+    }
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
@@ -49,7 +62,8 @@ export default function CreatePostPage() {
         try {
             const post = await postAPI.create({
                 content,
-                scheduled_time: scheduledTime || undefined,
+                // Convert local datetime-local input → UTC ISO string (with 'Z' suffix)
+                scheduled_time: scheduledTime ? localToIso(scheduledTime) : undefined,
             })
             addPost(post)
             invalidate()   // bust the chart cache so it reflects the new post
@@ -132,19 +146,17 @@ export default function CreatePostPage() {
                                     Schedule Time
                                     <span className="normal-case text-[10px] text-muted-foreground/60">(optional)</span>
                                 </label>
-                                <input
-                                    type="datetime-local"
+                                <DatePickerTime
                                     value={scheduledTime}
-                                    onChange={(e) => setScheduledTime(e.target.value)}
+                                    onChange={(value) => setScheduledTime(value)}
                                     disabled={isLoading || success}
-                                    className="w-full rounded-lg border border-border/50 bg-muted/30 px-4 py-2.5 text-sm focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:opacity-60 transition-colors [color-scheme:dark]"
                                 />
                             </div>
 
                             <Button
                                 type="submit"
                                 disabled={!isValid || isLoading || success}
-                                className="w-full gap-2"
+                                className="w-full gap-2 p-5 cursor-pointer"
                             >
                                 <SendIcon className="h-4 w-4" />
                                 {isLoading ? 'Creating…' : success ? 'Created!' : 'Create Post'}

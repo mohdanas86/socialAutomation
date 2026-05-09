@@ -22,7 +22,7 @@ STRUCTURE:
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.models.schemas import (
@@ -127,7 +127,7 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         environment=settings.app_env,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -254,7 +254,7 @@ async def oauth_callback(
         profile_data = AuthService.decode_id_token(id_token)
         
         # Step 3: Calculate token expiry
-        token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
+        token_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
         
         # Step 4: Use OpenID Connect subject as person identifier
         # LinkedIn userinfo returns "sub" which maps to person URN suffix.
@@ -753,7 +753,7 @@ async def get_dashboard_stats(
 
     try:
         db       = get_database()
-        since    = datetime.utcnow() - timedelta(days=days)
+        since    = datetime.now(timezone.utc) - timedelta(days=days)
 
         cursor = db["posts"].find(
             {"user_id": current_user, "created_at": {"$gte": since}},

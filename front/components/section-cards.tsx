@@ -71,7 +71,7 @@ export function SectionCards({ stats }: { stats: SectionCardStats }) {
         title="Total Posts"
         value={stats.total}
         icon={<FileTextIcon className="h-4 w-4 text-cyan-400" />}
-        gradient="bg-gradient-to-br from-cyan-500/10 via-card to-card"
+        gradient="bg-gradient-to-br from-cyan-500/10 via-[#181617] to-[#181617]"
         iconBg="bg-cyan-500/15 border border-cyan-500/20"
         badge={stats.total > 0 ? "Active" : undefined}
       />
@@ -79,7 +79,7 @@ export function SectionCards({ stats }: { stats: SectionCardStats }) {
         title="Published"
         value={stats.posted}
         icon={<CheckCircleIcon className="h-4 w-4 text-emerald-400" />}
-        gradient="bg-gradient-to-br from-emerald-500/10 via-card to-card"
+        gradient="bg-gradient-to-br from-emerald-500/10 via-[#181617] to-[#181617]"
         iconBg="bg-emerald-500/15 border border-emerald-500/20"
         badge={successRate > 0 ? `${successRate}%` : undefined}
       />
@@ -87,7 +87,7 @@ export function SectionCards({ stats }: { stats: SectionCardStats }) {
         title="Scheduled"
         value={stats.scheduled}
         icon={<CalendarClockIcon className="h-4 w-4 text-fuchsia-400" />}
-        gradient="bg-gradient-to-br from-fuchsia-500/10 via-card to-card"
+        gradient="bg-gradient-to-br from-fuchsia-500/10 via-[#181617] to-[#181617]"
         iconBg="bg-fuchsia-500/15 border border-fuchsia-500/20"
         badge={stats.scheduled > 0 ? "Queued" : undefined}
       />
@@ -95,7 +95,7 @@ export function SectionCards({ stats }: { stats: SectionCardStats }) {
         title="Failed"
         value={stats.failed}
         icon={<AlertCircleIcon className="h-4 w-4 text-rose-400" />}
-        gradient="bg-gradient-to-br from-rose-500/10 via-card to-card"
+        gradient="bg-gradient-to-br from-rose-500/10 via-[#181617] to-[#181617]"
         iconBg="bg-rose-500/15 border border-rose-500/20"
         badge={stats.failed > 0 ? "Needs attention" : undefined}
         badgeVariant={stats.failed > 0 ? "destructive" : "secondary"}

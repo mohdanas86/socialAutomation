@@ -22,10 +22,10 @@ import {
 // ─── Status badge ─────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
     const map: Record<string, { label: string; className: string }> = {
-        posted:    { label: 'Published', className: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25' },
-        scheduled: { label: 'Scheduled', className: 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/25' },
-        failed:    { label: 'Failed',    className: 'bg-rose-500/15 text-rose-400 border-rose-500/25' },
-        draft:     { label: 'Draft',     className: 'bg-muted text-muted-foreground border-border' },
+        posted: { label: 'Published', className: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.1)]' },
+        scheduled: { label: 'Scheduled', className: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40 shadow-[0_0_10px_rgba(217,70,239,0.1)]' },
+        failed: { label: 'Failed', className: 'bg-rose-500/20 text-rose-300 border-rose-500/40 shadow-[0_0_10px_rgba(244,63,94,0.1)]' },
+        draft: { label: 'Draft', className: 'bg-[#343234]/40 text-[#FEFEFF] border-[#343234] shadow-sm' },
     }
     const config = map[status] ?? map.draft
     return (
@@ -36,12 +36,16 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 // ─── Recent post row ──────────────────────────────────────────
+// Naive UTC strings from Python (no 'Z') must have 'Z' appended so JS parses as UTC
+const toUtcDate = (s: string) =>
+    new Date(s.endsWith('Z') || s.includes('+') ? s : s + 'Z')
+
 function PostRow({ post }: { post: { _id: string; content: string; status: string; scheduled_time?: string } }) {
     const iconMap: Record<string, React.ReactNode> = {
-        posted:    <CheckCircleIcon className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />,
-        scheduled: <ClockIcon       className="h-3.5 w-3.5 text-fuchsia-400 shrink-0 mt-0.5" />,
-        failed:    <AlertCircleIcon className="h-3.5 w-3.5 text-rose-400 shrink-0 mt-0.5" />,
-        draft:     <FileTextIcon    className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />,
+        posted: <CheckCircleIcon className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />,
+        scheduled: <ClockIcon className="h-3.5 w-3.5 text-fuchsia-400 shrink-0 mt-0.5" />,
+        failed: <AlertCircleIcon className="h-3.5 w-3.5 text-rose-400 shrink-0 mt-0.5" />,
+        draft: <FileTextIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />,
     }
     return (
         <div className="flex items-start gap-3 rounded-lg border border-border/40 bg-card/50 p-3 transition-colors hover:bg-card/80 hover:border-border/60">
@@ -50,7 +54,7 @@ function PostRow({ post }: { post: { _id: string; content: string; status: strin
                 <p className="line-clamp-2 text-sm leading-snug">{post.content}</p>
                 {post.scheduled_time && (
                     <p className="mt-1 text-[11px] text-muted-foreground">
-                        {new Date(post.scheduled_time).toLocaleDateString('en-US', {
+                        {toUtcDate(post.scheduled_time).toLocaleDateString('en-US', {
                             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                         })}
                     </p>
@@ -63,12 +67,12 @@ function PostRow({ post }: { post: { _id: string; content: string; status: strin
 
 // ─── Page ─────────────────────────────────────────────────────
 export default function DashboardPage() {
-    const user    = useAuthStore((s) => s.user)
-    const posts   = usePostStore((s) => s.posts)
+    const user = useAuthStore((s) => s.user)
+    const posts = usePostStore((s) => s.posts)
     const setPosts = usePostStore((s) => s.setPosts)
     const [isLoading, setIsLoading] = useState(true)
-    const [error, setError]         = useState<string | null>(null)
-    const hasFetchedRef             = useRef(false)
+    const [error, setError] = useState<string | null>(null)
+    const hasFetchedRef = useRef(false)
 
     useEffect(() => {
         if (!user || hasFetchedRef.current) return
@@ -103,11 +107,11 @@ export default function DashboardPage() {
         )
     }
 
-    const postedCount    = posts.filter((p) => p.status === 'posted').length
+    const postedCount = posts.filter((p) => p.status === 'posted').length
     const scheduledCount = posts.filter((p) => p.status === 'scheduled').length
-    const failedCount    = posts.filter((p) => p.status === 'failed').length
-    const recentPosts    = posts.slice(0, 6)
-    const firstName      = user?.name?.split(' ')[0] ?? 'there'
+    const failedCount = posts.filter((p) => p.status === 'failed').length
+    const recentPosts = posts.slice(0, 6)
+    const firstName = user?.name?.split(' ')[0] ?? 'there'
 
     return (
         <>
@@ -132,7 +136,9 @@ export default function DashboardPage() {
 
             {/* Chart + Recent Posts */}
             <div className="grid gap-4 px-4 lg:px-6 lg:grid-cols-2">
-                <ChartAreaInteractive />
+                <div>
+                    <ChartAreaInteractive />
+                </div>
 
                 <Card className="border-border/50 flex flex-col">
                     <CardHeader className="pb-3">

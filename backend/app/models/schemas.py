@@ -17,8 +17,13 @@ HOW IT WORKS:
 
 from pydantic import BaseModel, Field, EmailStr, validator
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
+
+
+def utc_now() -> datetime:
+    """Return current UTC time as timezone-aware datetime (always serializes with +00:00)."""
+    return datetime.now(timezone.utc)
 
 
 # ===========================
@@ -191,8 +196,8 @@ class UserDB(BaseModel):
     linkedin_member_id: Optional[str] = None
     linkedin_access_token: str  # Encrypted in production
     token_expiry: datetime
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
     class Config:
         from_attributes = True
@@ -209,7 +214,7 @@ class PostDB(BaseModel):
     linkedin_post_id: Optional[str] = None
     retry_count: int = 0
     last_error: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     posted_at: Optional[datetime] = None
 
     class Config:

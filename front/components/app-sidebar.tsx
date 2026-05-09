@@ -57,15 +57,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       {/* Brand header */}
-      <SidebarHeader className="border-b border-sidebar-border/50 pb-3">
+      <SidebarHeader className="border-b border-sidebar-border/50 py-3">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              className="data-[slot=sidebar-menu-button]:p-2! group"
+              className="data-[slot=sidebar-menu-button]:p-2! group hover:bg-transparent"
               render={<a href="/dashboard" />}
             >
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 border border-primary/25 ring-1 ring-primary/10 shrink-0">
-                <SparklesIcon className="size-3.5 text-primary" />
+              <div className="flex items-center justify-center rounded-lg bg-primary/15 border border-primary/25 ring-1 ring-primary/10 shrink-0">
+                <SparklesIcon className="size-3.5" />
               </div>
               <div className="flex flex-col gap-0 leading-none">
                 <span className="text-sm font-semibold tracking-tight">
