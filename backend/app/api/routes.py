@@ -21,7 +21,7 @@ STRUCTURE:
 - Post CRUD endpoints (all require auth)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -45,6 +45,34 @@ logger = get_logger(__name__)
 
 # Create router
 router = APIRouter()
+
+
+# ===========================
+# Helper Functions
+# ===========================
+
+
+def get_frontend_url(request: Optional[Request] = None) -> str:
+    """
+    Determine the frontend URL for redirects.
+    
+    Prefers production URLs (netlify, vercel, herokuapp) over localhost.
+    Falls back to localhost if no production URL configured.
+    
+    Args:
+        request: Optional FastAPI Request object (can be used for future origin detection)
+    
+    Returns:
+        Frontend URL (e.g., https://linkautomation.netlify.app or http://localhost:3000)
+    """
+    if settings.cors_origins:
+        # Priority 1: Look for production hosting
+        for origin in settings.cors_origins:
+            if any(host in origin.lower() for host in ["netlify", "vercel", "herokuapp"]):
+                return origin
+        # Priority 2: Return first configured origin
+        return settings.cors_origins[0]
+    return "http://localhost:3000"
 
 
 # ===========================
@@ -230,7 +258,7 @@ async def oauth_callback(
             error_msg = f"{error}: {error_description}" if error_description else error
             logger.error(f"OAuth callback error from LinkedIn: {error_msg}")
             from fastapi.responses import RedirectResponse
-            frontend_url = settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
+            frontend_url = get_frontend_url()
             redirect_url = f"{frontend_url}/?error={error_msg}"
             return RedirectResponse(url=redirect_url)
         
@@ -280,7 +308,7 @@ async def oauth_callback(
         # Frontend will store token and redirect to dashboard
         from fastapi.responses import RedirectResponse
         
-        frontend_url = settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
+        frontend_url = get_frontend_url()
         redirect_url = f"{frontend_url}/dashboard?token={jwt_token}"
         
         return RedirectResponse(url=redirect_url)
@@ -290,7 +318,7 @@ async def oauth_callback(
         # Redirect to frontend with error
         from fastapi.responses import RedirectResponse
         
-        frontend_url = settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
+        frontend_url = get_frontend_url()
         redirect_url = f"{frontend_url}/?error={str(e)}"
         
         return RedirectResponse(url=redirect_url)

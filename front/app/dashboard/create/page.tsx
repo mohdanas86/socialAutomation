@@ -42,15 +42,42 @@ export default function CreatePostPage() {
     const isValid = charCount >= MIN_CHARS && charCount <= MAX_CHARS
 
     /**
-     * Convert a datetime-local input value (e.g. "2026-05-09T12:30") to a proper
-     * ISO 8601 string with timezone offset (e.g. "2026-05-09T12:30:00+05:30").
-     * The browser datetime-local input gives LOCAL time with no tz info.
-     * We must tell the backend what timezone it was entered in.
+     * Convert a datetime-local input value to UTC ISO 8601 string.
+     * 
+     * CRITICAL: new Date("2026-05-09T12:30") treats the string as UTC, not local!
+     * We must manually account for the local timezone offset.
+     * 
+     * Example:
+     * - User in GMT+5:30 selects "May 9, 2026 at 12:30 PM"
+     * - This is 12:30 local time = 07:00 UTC
+     * - We send "2026-05-09T07:00:00Z" to backend
+     * 
+     * When backend stores as UTC and frontend displays with toLocaleString(),
+     * it will show "May 9, 12:30 PM" again in GMT+5:30. Perfect!
      */
     const localToIso = (localStr: string): string => {
         if (!localStr) return localStr
-        const d = new Date(localStr)   // JS treats naked string as local time ✓
-        return d.toISOString()         // Always produces UTC "Z" ISO string
+
+        // Parse the datetime-local string (YYYY-MM-DDTHH:mm)
+        const [datePart, timePart] = localStr.split('T')
+        if (!datePart || !timePart) return localStr
+
+        const [year, month, day] = datePart.split('-').map(Number)
+        const [hour, minute] = timePart.split(':').map(Number)
+
+        // Create a local date object
+        const localDate = new Date(year, month - 1, day, hour, minute, 0, 0)
+
+        // Get the local timezone offset in minutes (e.g., -330 for GMT+5:30)
+        const offsetMs = localDate.getTimezoneOffset() * 60 * 1000
+
+        // Convert local time to UTC by subtracting the offset
+        // If local is 12:30 and offset is -330 min (GMT+5:30), then:
+        // UTC time = 12:30 - 5:30 = 07:00
+        const utcDate = new Date(localDate.getTime() - offsetMs)
+
+        // Return as ISO string with Z suffix (indicates UTC)
+        return utcDate.toISOString()
     }
 
     const handleSubmit = async (e: React.FormEvent) => {
