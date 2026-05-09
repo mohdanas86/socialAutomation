@@ -45,3 +45,5 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+posts_content.txt

@@ -38,6 +38,16 @@ class PostService:
     """Service for managing posts and platform publishing."""
 
     @staticmethod
+    def normalize_utc_datetime(dt: datetime) -> datetime:
+        """
+        Normalize incoming datetime to timezone-aware UTC datetime.
+        Naive values are treated as UTC to preserve backward compatibility.
+        """
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    @staticmethod
     def validate_post_content(content: str) -> None:
         """
         Validate post content before scheduling.
@@ -118,9 +128,7 @@ class PostService:
             PostService.validate_post_content(content)
 
             # Validate scheduled time is in future
-            if scheduled_time.tzinfo is None:
-                # Treat naive datetime as UTC
-                scheduled_time = scheduled_time.replace(tzinfo=timezone.utc)
+            scheduled_time = PostService.normalize_utc_datetime(scheduled_time)
             if scheduled_time <= datetime.now(timezone.utc):
                 raise ValueError("Scheduled time must be in the future")
 
@@ -253,6 +261,9 @@ class PostService:
             if content:
                 updates["content"] = content.strip()
             if scheduled_time:
+                scheduled_time = PostService.normalize_utc_datetime(scheduled_time)
+                if scheduled_time <= datetime.now(timezone.utc):
+                    raise ValueError("Scheduled time must be in the future")
                 updates["scheduled_time"] = scheduled_time
 
             updated_post = await posts_col.find_one_and_update(
@@ -318,18 +329,48 @@ class PostService:
             raise
 
     @staticmethod
+    async def get_all_scheduled_posts() -> List[Dict]:
+        """
+        Get ALL scheduled posts (past and future).
+
+        Called on startup to reload all scheduled posts from database.
+        Returns posts where:
+        - Status is 'scheduled'
+        - ANY scheduled_time (past or future)
+
+        Returns:
+            List of all scheduled post documents
+        """
+        try:
+            db = get_database()
+            posts_col = db["posts"]
+
+            # Find ALL posts that are scheduled (regardless of time)
+            posts = []
+            async for post in posts_col.find(
+                {"status": PostStatus.SCHEDULED.value}
+            ).sort("scheduled_time", 1):
+                posts.append(post)
+
+            return posts
+
+        except Exception as e:
+            logger.error(f"Error fetching all scheduled posts: {str(e)}")
+            raise
+
+    @staticmethod
     async def get_posts_to_schedule() -> List[Dict]:
         """
-        Get all posts that need to be scheduled/posted.
+        Get posts that are DUE to be published RIGHT NOW.
 
-        Called by scheduler to find posts that are due to be published.
+        Called by the publish job to find posts that should be posted.
         Returns posts where:
         - Status is 'scheduled'
         - scheduled_time <= now
         - Not already being processed
 
         Returns:
-            List of post documents ready to post
+            List of post documents ready to post immediately
         """
         try:
             db = get_database()

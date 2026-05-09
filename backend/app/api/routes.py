@@ -396,6 +396,14 @@ async def create_post(
             )
 
         # Create post in database
+        # Log incoming scheduled_time for debugging timezone issues
+        try:
+            logger.info(f"[CREATE_POST] Received scheduled_time: {request.scheduled_time} (tzinfo={getattr(request.scheduled_time, 'tzinfo', None)})")
+            logger.info(f"[CREATE_POST] scheduled_time.isoformat(): {request.scheduled_time.isoformat()}")
+            logger.info(f"[CREATE_POST] Server now (UTC): {datetime.now(timezone.utc).isoformat()}")
+        except Exception:
+            logger.info(f"[CREATE_POST] Received scheduled_time (raw): {request.scheduled_time}")
+
         post = await PostService.create_post(
             user_id=current_user,
             content=request.content,
@@ -989,6 +997,101 @@ async def test_post_to_linkedin(
             "success": False,
             "error": str(e),
             "message": "Test post failed - check the error above"
+        }
+
+
+@router.get("/debug/scheduler-jobs", response_model=dict)
+async def debug_scheduler_jobs(
+    current_user: str = Depends(get_current_user),
+):
+    """
+    DEBUG ENDPOINT: View all scheduled jobs in the queue.
+    
+    Helps troubleshoot scheduling issues by showing:
+    - How many jobs are scheduled
+    - When each job is set to run
+    - Job IDs and status
+    
+    Args:
+        current_user: User ID (from JWT token)
+    
+    Returns:
+        List of scheduled jobs with details
+    """
+    try:
+        from app.scheduler.scheduler import get_scheduler
+        
+        sched = get_scheduler()
+        jobs = sched.get_jobs()
+        
+        job_list = []
+        for job in jobs:
+            job_list.append({
+                "id": job.id,
+                "func": str(job.func),
+                "next_run_time": str(job.next_run_time),
+                "args": str(job.args),
+            })
+        
+        return {
+            "total_jobs": len(job_list),
+            "jobs": job_list,
+            "scheduler_state": "running" if sched.running else "stopped",
+        }
+    
+    except Exception as e:
+        logger.error(f"Scheduler debug error: {str(e)}")
+        return {
+            "error": str(e),
+            "message": "Failed to fetch scheduler jobs"
+        }
+
+
+@router.post("/debug/test-timezone-conversion", response_model=dict)
+async def debug_timezone_conversion(
+    scheduled_time: str = Query(..., description="ISO datetime to test (e.g., 2026-05-04T23:38:00Z)"),
+    current_user: str = Depends(get_current_user),
+):
+    """
+    DEBUG ENDPOINT: Test timezone conversion and verify time handling.
+    
+    Shows:
+    - What time was received from frontend
+    - How it's interpreted by backend
+    - How it would be stored and displayed
+    
+    Args:
+        scheduled_time: ISO format datetime string from frontend
+        current_user: User ID (from JWT token)
+    
+    Returns:
+        Detailed breakdown of timezone handling
+    """
+    try:
+        logger.info(f"[DEBUG] Timezone test - Input: {scheduled_time}")
+        
+        # Parse the ISO string
+        parsed_time = datetime.fromisoformat(scheduled_time.replace('Z', '+00:00'))
+        logger.info(f"[DEBUG] Parsed as datetime: {parsed_time}")
+        logger.info(f"[DEBUG] Timezone aware: {parsed_time.tzinfo is not None}")
+        logger.info(f"[DEBUG] Timezone offset: {parsed_time.tzinfo}")
+        
+        # What it would look like in different formats
+        return {
+            "received": scheduled_time,
+            "parsed_iso": parsed_time.isoformat(),
+            "parsed_utc": str(parsed_time),
+            "timestamp": parsed_time.timestamp(),
+            "now_utc": datetime.now(timezone.utc).isoformat(),
+            "is_future": parsed_time > datetime.now(timezone.utc),
+            "message": "Time conversion debug info"
+        }
+    
+    except Exception as e:
+        logger.error(f"Timezone conversion test failed: {str(e)}")
+        return {
+            "error": str(e),
+            "message": "Failed to process timezone conversion"
         }
 
 

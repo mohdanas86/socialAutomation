@@ -15,49 +15,131 @@ import {
 import { cn } from "@/lib/utils"
 
 export function DatePickerTime({
-    value,
-    onChange,
-    disabled
+  value,
+  onChange,
+  disabled
 }: {
-    value?: string,
-    onChange: (value: string) => void,
-    disabled?: boolean
+  value?: string,
+  onChange: (value: string) => void,
+  disabled?: boolean
 }) {
   const [open, setOpen] = React.useState(false)
 
-  // We rely on the "YYYY-MM-DDTHH:mm" format, matching `<input type="datetime-local" />`
-  // so the value works exactly the same in the parent component.
-  const dateObj = value ? new Date(value) : undefined
-  const timeStr = value ? format(dateObj!, "HH:mm") : ""
+  const isSameLocalDate = (a: Date, b: Date): boolean => {
+    return (
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate()
+    )
+  }
+
+  const getNextMinute = (): Date => {
+    const d = new Date()
+    d.setSeconds(0, 0)
+    d.setMinutes(d.getMinutes() + 1)
+    return d
+  }
+
+  /**
+   * Parse the YYYY-MM-DDTHH:mm format back into local Date object.
+   * CRITICAL: This Date represents LOCAL time, not UTC.
+   */
+  const parseLocalDateTime = (str: string | undefined): Date | undefined => {
+    if (!str) return undefined
+    const [datePart, timePart] = str.split('T')
+    if (!datePart || !timePart) return undefined
+
+    const [year, month, day] = datePart.split('-').map(Number)
+    const [hour, minute] = timePart.split(':').map(Number)
+
+    // Create Date in LOCAL timezone (this is what we stored)
+    return new Date(year, month - 1, day, hour, minute, 0, 0)
+  }
+
+  const dateObj = parseLocalDateTime(value)
+  const timeStr = dateObj ? format(dateObj, "HH:mm") : ""
+
+  /**
+   * Convert local Date components to YYYY-MM-DDTHH:mm format string.
+   * The Date object represents LOCAL time, so we extract local components.
+   */
+  const formatLocalDateTime = (date: Date, hours: string, minutes: string): string => {
+    const yyyy = date.getFullYear()
+    const mm = String(date.getMonth() + 1).padStart(2, "0")
+    const dd = String(date.getDate()).padStart(2, "0")
+    return `${yyyy}-${mm}-${dd}T${hours}:${minutes}`
+  }
 
   const handleDateSelect = (d: Date | undefined) => {
     if (!d) {
       onChange("")
       return
     }
+
+    // Use current value time or default to 12:00
     const [hours, minutes] = timeStr ? timeStr.split(":") : ["12", "00"]
-    d.setHours(parseInt(hours, 10))
-    d.setMinutes(parseInt(minutes, 10))
-    
-    const yyyy = d.getFullYear()
-    const mm = String(d.getMonth() + 1).padStart(2, "0")
-    const dd = String(d.getDate()).padStart(2, "0")
-    onChange(`${yyyy}-${mm}-${dd}T${hours}:${minutes}`)
+
+    // Create a new Date representing the selected date at the specified time (in local timezone)
+    let selectedDate = new Date(d.getFullYear(), d.getMonth(), d.getDate(),
+      parseInt(hours, 10), parseInt(minutes, 10), 0, 0)
+
+    // If user picked today and selected time is already past, move to next minute.
+    const now = new Date()
+    if (isSameLocalDate(selectedDate, now) && selectedDate.getTime() <= now.getTime()) {
+      const nextMinute = getNextMinute()
+      selectedDate = new Date(
+        d.getFullYear(),
+        d.getMonth(),
+        d.getDate(),
+        nextMinute.getHours(),
+        nextMinute.getMinutes(),
+        0,
+        0
+      )
+    }
+
+    const result = formatLocalDateTime(
+      selectedDate,
+      String(selectedDate.getHours()).padStart(2, "0"),
+      String(selectedDate.getMinutes()).padStart(2, "0")
+    )
+    console.log(`[DatePicker] Date selected: ${result}`)
+    console.log(`[DatePicker] Selected date in future: ${selectedDate > new Date()}`)
+    onChange(result)
     setOpen(false)
   }
 
   const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = e.target.value
     if (!dateObj) return
-    const d = new Date(dateObj)
+
     const [hours, minutes] = newTime.split(":")
-    d.setHours(parseInt(hours, 10))
-    d.setMinutes(parseInt(minutes, 10))
-    
-    const yyyy = d.getFullYear()
-    const mm = String(d.getMonth() + 1).padStart(2, "0")
-    const dd = String(d.getDate()).padStart(2, "0")
-    onChange(`${yyyy}-${mm}-${dd}T${hours}:${minutes}`)
+
+    // Create new Date with same date but new time
+    let updatedDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(),
+      parseInt(hours, 10), parseInt(minutes, 10), 0, 0)
+
+    const now = new Date()
+    if (isSameLocalDate(updatedDate, now) && updatedDate.getTime() <= now.getTime()) {
+      const nextMinute = getNextMinute()
+      updatedDate = new Date(
+        dateObj.getFullYear(),
+        dateObj.getMonth(),
+        dateObj.getDate(),
+        nextMinute.getHours(),
+        nextMinute.getMinutes(),
+        0,
+        0
+      )
+    }
+
+    const result = formatLocalDateTime(
+      updatedDate,
+      String(updatedDate.getHours()).padStart(2, "0"),
+      String(updatedDate.getMinutes()).padStart(2, "0")
+    )
+    console.log(`[DatePicker] Time changed: ${result}`)
+    onChange(result)
   }
 
   return (
@@ -84,20 +166,27 @@ export function DatePickerTime({
               mode="single"
               selected={dateObj}
               onSelect={handleDateSelect}
+              disabled={(date) => {
+                // Disable dates before today
+                const today = new Date()
+                today.setHours(0, 0, 0, 0)
+                return date < today
+              }}
             />
           </PopoverContent>
         </Popover>
       </div>
       <div className="w-full sm:w-40 shrink-0">
         <div className="relative">
-            <ClockIcon className="absolute left-3 top-3 h-4 w-4 text-muted-foreground/50" />
-            <Input
-              type="time"
-              disabled={disabled || !dateObj}
-              value={timeStr}
-              onChange={handleTimeChange}
-              className="w-full pl-9 h-10 border-border/50 bg-muted/30 focus:border-primary/50 focus:ring-primary/30 transition-colors [color-scheme:dark] [&::-webkit-calendar-picker-indicator]:hidden"
-            />
+          <ClockIcon className="absolute left-3 top-3 h-4 w-4 text-muted-foreground/50" />
+          <Input
+            type="time"
+            disabled={disabled || !dateObj}
+            value={timeStr}
+            onChange={handleTimeChange}
+            step={60}
+            className="w-full pl-9 h-10 border-border/50 bg-muted/30 focus:border-primary/50 focus:ring-primary/30 transition-colors [color-scheme:dark] [&::-webkit-calendar-picker-indicator]:hidden"
+          />
         </div>
       </div>
     </div>

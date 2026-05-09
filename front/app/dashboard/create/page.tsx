@@ -42,42 +42,14 @@ export default function CreatePostPage() {
     const isValid = charCount >= MIN_CHARS && charCount <= MAX_CHARS
 
     /**
-     * Convert a datetime-local input value to UTC ISO 8601 string.
-     * 
-     * CRITICAL: new Date("2026-05-09T12:30") treats the string as UTC, not local!
-     * We must manually account for the local timezone offset.
-     * 
-     * Example:
-     * - User in GMT+5:30 selects "May 9, 2026 at 12:30 PM"
-     * - This is 12:30 local time = 07:00 UTC
-     * - We send "2026-05-09T07:00:00Z" to backend
-     * 
-     * When backend stores as UTC and frontend displays with toLocaleString(),
-     * it will show "May 9, 12:30 PM" again in GMT+5:30. Perfect!
+     * Convert local datetime-local value (YYYY-MM-DDTHH:mm) to UTC ISO.
+     * new Date(localStr) already interprets the input in the browser's local timezone.
      */
     const localToIso = (localStr: string): string => {
         if (!localStr) return localStr
-
-        // Parse the datetime-local string (YYYY-MM-DDTHH:mm)
-        const [datePart, timePart] = localStr.split('T')
-        if (!datePart || !timePart) return localStr
-
-        const [year, month, day] = datePart.split('-').map(Number)
-        const [hour, minute] = timePart.split(':').map(Number)
-
-        // Create a local date object
-        const localDate = new Date(year, month - 1, day, hour, minute, 0, 0)
-
-        // Get the local timezone offset in minutes (e.g., -330 for GMT+5:30)
-        const offsetMs = localDate.getTimezoneOffset() * 60 * 1000
-
-        // Convert local time to UTC by subtracting the offset
-        // If local is 12:30 and offset is -330 min (GMT+5:30), then:
-        // UTC time = 12:30 - 5:30 = 07:00
-        const utcDate = new Date(localDate.getTime() - offsetMs)
-
-        // Return as ISO string with Z suffix (indicates UTC)
-        return utcDate.toISOString()
+        const localDate = new Date(localStr)
+        if (isNaN(localDate.getTime())) return localStr
+        return localDate.toISOString()
     }
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -87,17 +59,54 @@ export default function CreatePostPage() {
         setIsLoading(true)
 
         try {
+            const isoTime = scheduledTime ? localToIso(scheduledTime) : undefined
+            console.log(`[handleSubmit] Scheduled time (local): ${scheduledTime}`)
+            console.log(`[handleSubmit] Scheduled time (UTC): ${isoTime}`)
+
+            // Validate scheduled time is in the future using local interpretation.
+            if (scheduledTime) {
+                // Parse YYYY-MM-DDTHH:mm into a local Date (same logic as the date picker)
+                const [datePart, timePart] = scheduledTime.split('T')
+                let localScheduled: Date | null = null
+                if (datePart && timePart) {
+                    const [y, m, d] = datePart.split('-').map(Number)
+                    const [hh, mm] = timePart.split(':').map(Number)
+                    localScheduled = new Date(y, m - 1, d, hh, mm, 0, 0)
+                }
+
+                if (!localScheduled || isNaN(localScheduled.getTime())) {
+                    setError('Invalid scheduled time format')
+                    setIsLoading(false)
+                    return
+                }
+
+                const now = new Date()
+                const diffMs = localScheduled.getTime() - now.getTime()
+                console.log(`[handleSubmit] Local scheduled: ${localScheduled.toString()} (diffMs=${diffMs})`)
+                console.log(`[handleSubmit] UTC isoTime: ${isoTime}`)
+
+                if (diffMs <= 0) {
+                    setError('Scheduled time must be in the future')
+                    setIsLoading(false)
+                    return
+                }
+            }
+
             const post = await postAPI.create({
                 content,
                 // Convert local datetime-local input → UTC ISO string (with 'Z' suffix)
-                scheduled_time: scheduledTime ? localToIso(scheduledTime) : undefined,
+                scheduled_time: isoTime,
             })
+
+            console.log(`[handleSubmit] Post created successfully:`, post)
             addPost(post)
             invalidate()   // bust the chart cache so it reflects the new post
             setSuccess(true)
             setTimeout(() => router.push('/dashboard/posts'), 1200)
         } catch (err: any) {
-            setError(err.response?.data?.detail || 'Failed to create post. Please try again.')
+            console.error(`[handleSubmit] Error creating post:`, err)
+            const errorMessage = err.response?.data?.detail || 'Failed to create post. Please try again.'
+            setError(errorMessage)
         } finally {
             setIsLoading(false)
         }
@@ -178,6 +187,9 @@ export default function CreatePostPage() {
                                     onChange={(value) => setScheduledTime(value)}
                                     disabled={isLoading || success}
                                 />
+                                <p className="text-[11px] text-muted-foreground/60">
+                                    Select any future date/time (24-hour format, e.g. 17:44 for 5:44 PM)
+                                </p>
                             </div>
 
                             <Button
