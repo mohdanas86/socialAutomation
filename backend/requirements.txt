@@ -35,3 +35,6 @@ httpx==0.25.2
 
 # Type checking (optional but recommended)
 mypy==1.7.1
+
+
+gunicorn
