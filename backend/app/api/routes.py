@@ -526,7 +526,7 @@ async def generate_and_schedule_posts(
     current_user: str = Depends(get_current_user),
 ):
     """
-    Generate and automatically schedule posts using Gemini.
+    Generate and automatically schedule posts using configured LLM provider.
     """
     try:
         user = await AuthService.get_user_by_id(current_user)
@@ -536,8 +536,8 @@ async def generate_and_schedule_posts(
                 detail="User not found",
             )
             
-        # Generate posts using Gemini
-        posts_data = await LLMService.generate_posts(request)
+        # Generate posts using the reusable LLM service
+        posts_data = await LLMService.generate_posts_from_request(request)
         
         # Schedule each post
         created_posts = []
@@ -587,17 +587,35 @@ async def generate_and_schedule_posts(
             created_posts.append(post)
             
         return {
+            "success": True,
             "message": f"Successfully generated and scheduled {len(created_posts)} posts",
-            "count": len(created_posts)
+            "count": len(created_posts),
+            "posts": [
+                {
+                    "id": str(p["_id"]),
+                    "content": p["content"],
+                    "scheduled_time": p["scheduled_time"].isoformat() if hasattr(p["scheduled_time"], "isoformat") else str(p["scheduled_time"]),
+                    "status": p["status"],
+                }
+                for p in created_posts
+            ],
         }
         
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        logger.warning(f"Post generation validation error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"success": False, "error": "generation_failed", "message": str(e)},
+        )
     except Exception as e:
         logger.error(f"Error generating posts: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate posts: {str(e)}",
+            detail={
+                "success": False,
+                "error": "internal_server_error",
+                "message": "Failed to generate posts",
+            },
         )
 
 

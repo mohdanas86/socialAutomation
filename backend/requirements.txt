@@ -38,5 +38,6 @@ mypy==1.7.1
 
 # Generative AI
 google-generativeai==0.8.4
+huggingface-hub
 
 gunicorn

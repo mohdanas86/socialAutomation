@@ -14,6 +14,7 @@ WHAT IT DOES:
 - Separates config from code
 """
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 from typing import List
 
@@ -52,8 +53,29 @@ class Settings(BaseSettings):
     max_retries: int = 3
     retry_backoff_base: int = 5  # Exponential backoff base
 
+    # LLM Settings
+    llm_provider: str = "huggingface" # options: "gemini", "huggingface"
+
     # Gemini
     gemini_api_key: str = ""
+    
+    # HuggingFace
+    hf_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("HF_API_KEY", "HUGGINGFACE_API_KEY", "huggingface_api_key"),
+    )
+    hf_model_1: str = Field(
+        default="Qwen/Qwen2.5-7B-Instruct",
+        validation_alias=AliasChoices("HF_MODEL_1", "HUGGINGFACE_MODEL_ID", "huggingface_model_id"),
+    )
+    hf_model_2: str = Field(
+        default="mistralai/Mistral-7B-Instruct-v0.3",
+        validation_alias=AliasChoices("HF_MODEL_2", "HUGGINGFACE_FALLBACK_MODEL_ID", "huggingface_fallback_model_id"),
+    )
+    hf_model_3: str = Field(
+        default="meta-llama/Llama-3.1-8B-Instruct",
+        validation_alias=AliasChoices("HF_MODEL_3"),
+    )
 
     class Config:
         # Automatically load from .env file
