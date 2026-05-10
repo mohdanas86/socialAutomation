@@ -15,7 +15,7 @@ class LLMService:
                 raise ValueError("Gemini API key is not configured")
                 
             genai.configure(api_key=settings.gemini_api_key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
+            model = genai.GenerativeModel("gemini-2.0-flash-lite")
             
             prompt = f"""
 You are an expert LinkedIn copywriter. I need you to write {request.postCount} distinct, high-quality LinkedIn posts.
