@@ -111,6 +111,44 @@ class LoginRequest(BaseModel):
     code: str = Field(..., description="OAuth authorization code from LinkedIn")
 
 
+class ScheduleOptions(BaseModel):
+    preferredTime: str
+    gapHours: int
+    startDate: str
+
+
+class AIOptions(BaseModel):
+    includeHook: bool
+    includeCTA: bool
+    includeHashtags: bool
+    includeEmojis: bool
+    humanLike: bool
+    conciseWriting: bool
+
+
+class Constraints(BaseModel):
+    minChars: int
+    maxChars: int
+
+
+class GeneratePostRequest(BaseModel):
+    """Request body for generating posts using AI."""
+
+    topic: str
+    niche: str
+    postCount: int
+    targetAudience: str
+    tones: List[str]
+    contentGoal: str
+    postStyle: str
+    schedule: ScheduleOptions
+    aiOptions: AIOptions
+    constraints: Constraints
+    keywords: List[str]
+    customInstructions: str
+    generatedAt: str
+
+
 # ===========================
 # Response Models (API Output)
 # ===========================

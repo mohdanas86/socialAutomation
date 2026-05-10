@@ -46,11 +46,14 @@ class Settings(BaseSettings):
     jwt_expiration_hours: int = 24
 
     # CORS
-    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:8000"]
+    cors_origins: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000"]
 
     # Retry Configuration
     max_retries: int = 3
     retry_backoff_base: int = 5  # Exponential backoff base
+
+    # Gemini
+    gemini_api_key: str = ""
 
     class Config:
         # Automatically load from .env file

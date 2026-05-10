@@ -34,9 +34,12 @@ from app.models.schemas import (
     HealthResponse,
     ErrorResponse,
     PostStatus,
+    GeneratePostRequest,
+    PlatformType,
 )
 from app.services.auth_service import AuthService
 from app.services.post_service import PostService
+from app.services.llm_service import LLMService
 from app.utils.logger import get_logger
 from app.utils.config import settings
 from bson import ObjectId
@@ -54,23 +57,24 @@ router = APIRouter()
 
 def get_frontend_url(request: Optional[Request] = None) -> str:
     """
-    Determine the frontend URL for redirects.
+    Determine the frontend URL for redirects based on the environment.
     
-    Prefers production URLs (netlify, vercel, herokuapp) over localhost.
-    Falls back to localhost if no production URL configured.
-    
-    Args:
-        request: Optional FastAPI Request object (can be used for future origin detection)
-    
-    Returns:
-        Frontend URL (e.g., https://linkautomation.netlify.app or http://localhost:3000)
+    If app_env is production, prefers production URLs (netlify, vercel, herokuapp).
+    If app_env is development, prefers localhost/127.0.0.1.
     """
     if settings.cors_origins:
-        # Priority 1: Look for production hosting
+        is_prod = settings.app_env.lower() in ["production", "prod"]
+        
+        # Look for a matching origin based on environment
         for origin in settings.cors_origins:
-            if any(host in origin.lower() for host in ["netlify", "vercel", "herokuapp"]):
+            is_origin_prod = any(host in origin.lower() for host in ["netlify", "vercel", "herokuapp"])
+            
+            if is_prod and is_origin_prod:
                 return origin
-        # Priority 2: Return first configured origin
+            if not is_prod and ("localhost" in origin.lower() or "127.0.0.1" in origin.lower()):
+                return origin
+                
+        # Fallback to the first configured origin if no perfect match is found
         return settings.cors_origins[0]
     return "http://localhost:3000"
 
@@ -513,6 +517,87 @@ async def list_posts(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list posts",
+        )
+
+
+@router.post("/api/posts/generate", response_model=dict, status_code=status.HTTP_201_CREATED)
+async def generate_and_schedule_posts(
+    request: GeneratePostRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Generate and automatically schedule posts using Gemini.
+    """
+    try:
+        user = await AuthService.get_user_by_id(current_user)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+            
+        # Generate posts using Gemini
+        posts_data = await LLMService.generate_posts(request)
+        
+        # Schedule each post
+        created_posts = []
+        try:
+            # Parse start date and make it timezone aware UTC
+            base_date = datetime.fromisoformat(request.schedule.startDate)
+            if base_date.tzinfo is None:
+                base_date = base_date.replace(tzinfo=timezone.utc)
+        except ValueError:
+            # Fallback if start date is just YYYY-MM-DD
+            dt = datetime.strptime(request.schedule.startDate, "%Y-%m-%d")
+            base_date = dt.replace(tzinfo=timezone.utc)
+            
+        # Adjust preferred time on the base date first
+        if request.schedule.preferredTime == 'morning':
+            base_date = base_date.replace(hour=9, minute=0, second=0)
+        elif request.schedule.preferredTime == 'afternoon':
+            base_date = base_date.replace(hour=14, minute=0, second=0)
+        elif request.schedule.preferredTime == 'evening':
+            base_date = base_date.replace(hour=18, minute=0, second=0)
+        
+        from app.scheduler.scheduler import schedule_post
+        
+        for idx, post_obj in enumerate(posts_data):
+            content = post_obj.get("content", "")
+            if not content:
+                continue
+                
+            # Calculate scheduled time
+            hours_to_add = idx * request.schedule.gapHours
+            scheduled_time = base_date + timedelta(hours=hours_to_add)
+            
+            # Ensure scheduled time is not in the past
+            if scheduled_time <= datetime.now(timezone.utc):
+                scheduled_time = datetime.now(timezone.utc) + timedelta(minutes=5)
+            
+            # Create post in database
+            post = await PostService.create_post(
+                user_id=current_user,
+                content=content,
+                scheduled_time=scheduled_time,
+                platform=PlatformType.LINKEDIN,
+            )
+            
+            # Schedule in APScheduler
+            await schedule_post(str(post["_id"]), scheduled_time)
+            created_posts.append(post)
+            
+        return {
+            "message": f"Successfully generated and scheduled {len(created_posts)} posts",
+            "count": len(created_posts)
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error generating posts: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate posts: {str(e)}",
         )
 
 

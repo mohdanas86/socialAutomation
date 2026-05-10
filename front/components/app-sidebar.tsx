@@ -35,14 +35,14 @@ const navMain = [
     icon: <PlusCircleIcon className="size-4" />,
   },
   {
+    title: " AI Generated",
+    url: "/dashboard/generate",
+    icon: <SparklesIcon className="size-4" />,
+  },
+  {
     title: "My Posts",
     url: "/dashboard/posts",
     icon: <FileTextIcon className="size-4" />,
-  },
-  {
-    title: "Scheduled",
-    url: "/dashboard/schedule",
-    icon: <CalendarClockIcon className="size-4" />,
   },
 ]
 
