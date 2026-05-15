@@ -17,8 +17,13 @@ HOW IT WORKS:
 
 from pydantic import BaseModel, Field, EmailStr, validator
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
+
+
+def utc_now() -> datetime:
+    """Return current UTC time as timezone-aware datetime (always serializes with +00:00)."""
+    return datetime.now(timezone.utc)
 
 
 # ===========================
@@ -106,6 +111,44 @@ class LoginRequest(BaseModel):
     code: str = Field(..., description="OAuth authorization code from LinkedIn")
 
 
+class ScheduleOptions(BaseModel):
+    preferredTime: str
+    gapHours: int
+    startDate: str
+
+
+class AIOptions(BaseModel):
+    includeHook: bool
+    includeCTA: bool
+    includeHashtags: bool
+    includeEmojis: bool
+    humanLike: bool
+    conciseWriting: bool
+
+
+class Constraints(BaseModel):
+    minChars: int
+    maxChars: int
+
+
+class GeneratePostRequest(BaseModel):
+    """Request body for generating posts using AI."""
+
+    topic: str
+    niche: str
+    postCount: int
+    targetAudience: str
+    tones: List[str]
+    contentGoal: str
+    postStyle: str
+    schedule: ScheduleOptions
+    aiOptions: AIOptions
+    constraints: Constraints
+    keywords: List[str]
+    customInstructions: str
+    generatedAt: str
+
+
 # ===========================
 # Response Models (API Output)
 # ===========================
@@ -191,8 +234,8 @@ class UserDB(BaseModel):
     linkedin_member_id: Optional[str] = None
     linkedin_access_token: str  # Encrypted in production
     token_expiry: datetime
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
     class Config:
         from_attributes = True
@@ -209,7 +252,7 @@ class PostDB(BaseModel):
     linkedin_post_id: Optional[str] = None
     retry_count: int = 0
     last_error: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     posted_at: Optional[datetime] = None
 
     class Config:

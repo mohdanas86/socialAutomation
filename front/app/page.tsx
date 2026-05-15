@@ -50,7 +50,7 @@ export default function Home() {
               </Button>
             </Link>
 
-            <a href="https://github.com" target="_blank" rel="noopener noreferrer">
+            <a href="https://github.com/mohdanas86" target="_blank" rel="noopener noreferrer">
               <Button className="w-full rounded-full border border-white/20 bg-transparent text-white hover:bg-white/10 font-semibold h-12 px-6 text-base">
                 View on GitHub
               </Button>

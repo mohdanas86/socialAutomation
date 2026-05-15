@@ -23,7 +23,7 @@ Enterprise apps always separate:
 This keeps code organized, testable, and reusable.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, List
 from bson import ObjectId
 from app.utils.logger import get_logger
@@ -36,6 +36,16 @@ logger = get_logger(__name__)
 
 class PostService:
     """Service for managing posts and platform publishing."""
+
+    @staticmethod
+    def normalize_utc_datetime(dt: datetime) -> datetime:
+        """
+        Normalize incoming datetime to timezone-aware UTC datetime.
+        Naive values are treated as UTC to preserve backward compatibility.
+        """
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
 
     @staticmethod
     def validate_post_content(content: str) -> None:
@@ -118,7 +128,8 @@ class PostService:
             PostService.validate_post_content(content)
 
             # Validate scheduled time is in future
-            if scheduled_time <= datetime.utcnow():
+            scheduled_time = PostService.normalize_utc_datetime(scheduled_time)
+            if scheduled_time <= datetime.now(timezone.utc):
                 raise ValueError("Scheduled time must be in the future")
 
             db = get_database()
@@ -246,10 +257,13 @@ class PostService:
                 raise ValueError("Cannot edit a post that's already been posted")
 
             # Build update
-            updates = {"updated_at": datetime.utcnow()}
+            updates = {"updated_at": datetime.now(timezone.utc)}
             if content:
                 updates["content"] = content.strip()
             if scheduled_time:
+                scheduled_time = PostService.normalize_utc_datetime(scheduled_time)
+                if scheduled_time <= datetime.now(timezone.utc):
+                    raise ValueError("Scheduled time must be in the future")
                 updates["scheduled_time"] = scheduled_time
 
             updated_post = await posts_col.find_one_and_update(
@@ -315,24 +329,54 @@ class PostService:
             raise
 
     @staticmethod
+    async def get_all_scheduled_posts() -> List[Dict]:
+        """
+        Get ALL scheduled posts (past and future).
+
+        Called on startup to reload all scheduled posts from database.
+        Returns posts where:
+        - Status is 'scheduled'
+        - ANY scheduled_time (past or future)
+
+        Returns:
+            List of all scheduled post documents
+        """
+        try:
+            db = get_database()
+            posts_col = db["posts"]
+
+            # Find ALL posts that are scheduled (regardless of time)
+            posts = []
+            async for post in posts_col.find(
+                {"status": PostStatus.SCHEDULED.value}
+            ).sort("scheduled_time", 1):
+                posts.append(post)
+
+            return posts
+
+        except Exception as e:
+            logger.error(f"Error fetching all scheduled posts: {str(e)}")
+            raise
+
+    @staticmethod
     async def get_posts_to_schedule() -> List[Dict]:
         """
-        Get all posts that need to be scheduled/posted.
+        Get posts that are DUE to be published RIGHT NOW.
 
-        Called by scheduler to find posts that are due to be published.
+        Called by the publish job to find posts that should be posted.
         Returns posts where:
         - Status is 'scheduled'
         - scheduled_time <= now
         - Not already being processed
 
         Returns:
-            List of post documents ready to post
+            List of post documents ready to post immediately
         """
         try:
             db = get_database()
             posts_col = db["posts"]
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             # Find posts that should be posted now
             posts = []
@@ -377,11 +421,11 @@ class PostService:
 
             updates = {
                 "status": status.value,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
 
             if status == PostStatus.POSTED:
-                updates["posted_at"] = datetime.utcnow()
+                updates["posted_at"] = datetime.now(timezone.utc)
                 updates["linkedin_post_id"] = linkedin_post_id
 
             if error:
@@ -421,7 +465,7 @@ class PostService:
                 {"_id": ObjectId(post_id)},
                 {
                     "$inc": {"retry_count": 1},
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
                 return_document=True,
             )

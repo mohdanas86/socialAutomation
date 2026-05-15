@@ -31,9 +31,21 @@ export function CreatePostForm() {
         setIsLoading(true)
 
         try {
+            let isoScheduledTime: string | undefined = undefined
+            if (scheduledTime) {
+                const parsed = new Date(scheduledTime)
+                if (isNaN(parsed.getTime())) {
+                    throw new Error('Invalid scheduled time format')
+                }
+                if (parsed.getTime() <= Date.now()) {
+                    throw new Error('Scheduled time must be in the future')
+                }
+                isoScheduledTime = parsed.toISOString()
+            }
+
             const post = await postAPI.create({
                 content,
-                scheduled_time: scheduledTime || undefined,
+                scheduled_time: isoScheduledTime,
             })
 
             addPost(post)
@@ -46,7 +58,7 @@ export function CreatePostForm() {
             }, 1500)
         } catch (err: any) {
             setError(
-                err.response?.data?.detail || 'Failed to create post'
+                err.response?.data?.detail || err.message || 'Failed to create post'
             )
         } finally {
             setIsLoading(false)

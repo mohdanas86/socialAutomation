@@ -21,8 +21,8 @@ STRUCTURE:
 - Post CRUD endpoints (all require auth)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
-from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.models.schemas import (
@@ -34,9 +34,12 @@ from app.models.schemas import (
     HealthResponse,
     ErrorResponse,
     PostStatus,
+    GeneratePostRequest,
+    PlatformType,
 )
 from app.services.auth_service import AuthService
 from app.services.post_service import PostService
+from app.services.llm_service import LLMService
 from app.utils.logger import get_logger
 from app.utils.config import settings
 from bson import ObjectId
@@ -45,6 +48,35 @@ logger = get_logger(__name__)
 
 # Create router
 router = APIRouter()
+
+
+# ===========================
+# Helper Functions
+# ===========================
+
+
+def get_frontend_url(request: Optional[Request] = None) -> str:
+    """
+    Determine the frontend URL for redirects based on the environment.
+    
+    If app_env is production, prefers production URLs (netlify, vercel, herokuapp).
+    If app_env is development, prefers localhost/127.0.0.1.
+    """
+    if settings.cors_origins:
+        is_prod = settings.app_env.lower() in ["production", "prod"]
+        
+        # Look for a matching origin based on environment
+        for origin in settings.cors_origins:
+            is_origin_prod = any(host in origin.lower() for host in ["netlify", "vercel", "herokuapp"])
+            
+            if is_prod and is_origin_prod:
+                return origin
+            if not is_prod and ("localhost" in origin.lower() or "127.0.0.1" in origin.lower()):
+                return origin
+                
+        # Fallback to the first configured origin if no perfect match is found
+        return settings.cors_origins[0]
+    return "http://localhost:3000"
 
 
 # ===========================
@@ -113,7 +145,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> str:
 # ===========================
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health_check():
     """
     Health check endpoint.
@@ -127,7 +159,7 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         environment=settings.app_env,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
 
@@ -230,7 +262,7 @@ async def oauth_callback(
             error_msg = f"{error}: {error_description}" if error_description else error
             logger.error(f"OAuth callback error from LinkedIn: {error_msg}")
             from fastapi.responses import RedirectResponse
-            frontend_url = settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
+            frontend_url = get_frontend_url()
             redirect_url = f"{frontend_url}/?error={error_msg}"
             return RedirectResponse(url=redirect_url)
         
@@ -254,7 +286,7 @@ async def oauth_callback(
         profile_data = AuthService.decode_id_token(id_token)
         
         # Step 3: Calculate token expiry
-        token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
+        token_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
         
         # Step 4: Use OpenID Connect subject as person identifier
         # LinkedIn userinfo returns "sub" which maps to person URN suffix.
@@ -280,7 +312,7 @@ async def oauth_callback(
         # Frontend will store token and redirect to dashboard
         from fastapi.responses import RedirectResponse
         
-        frontend_url = settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
+        frontend_url = get_frontend_url()
         redirect_url = f"{frontend_url}/dashboard?token={jwt_token}"
         
         return RedirectResponse(url=redirect_url)
@@ -290,7 +322,7 @@ async def oauth_callback(
         # Redirect to frontend with error
         from fastapi.responses import RedirectResponse
         
-        frontend_url = settings.cors_origins[0] if settings.cors_origins else "http://localhost:3000"
+        frontend_url = get_frontend_url()
         redirect_url = f"{frontend_url}/?error={str(e)}"
         
         return RedirectResponse(url=redirect_url)
@@ -368,6 +400,14 @@ async def create_post(
             )
 
         # Create post in database
+        # Log incoming scheduled_time for debugging timezone issues
+        try:
+            logger.info(f"[CREATE_POST] Received scheduled_time: {request.scheduled_time} (tzinfo={getattr(request.scheduled_time, 'tzinfo', None)})")
+            logger.info(f"[CREATE_POST] scheduled_time.isoformat(): {request.scheduled_time.isoformat()}")
+            logger.info(f"[CREATE_POST] Server now (UTC): {datetime.now(timezone.utc).isoformat()}")
+        except Exception:
+            logger.info(f"[CREATE_POST] Received scheduled_time (raw): {request.scheduled_time}")
+
         post = await PostService.create_post(
             user_id=current_user,
             content=request.content,
@@ -477,6 +517,105 @@ async def list_posts(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list posts",
+        )
+
+
+@router.post("/api/posts/generate", response_model=dict, status_code=status.HTTP_201_CREATED)
+async def generate_and_schedule_posts(
+    request: GeneratePostRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Generate and automatically schedule posts using configured LLM provider.
+    """
+    try:
+        user = await AuthService.get_user_by_id(current_user)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+            
+        # Generate posts using the reusable LLM service
+        posts_data = await LLMService.generate_posts_from_request(request)
+        
+        # Schedule each post
+        created_posts = []
+        try:
+            # Parse start date and make it timezone aware UTC
+            base_date = datetime.fromisoformat(request.schedule.startDate)
+            if base_date.tzinfo is None:
+                base_date = base_date.replace(tzinfo=timezone.utc)
+        except ValueError:
+            # Fallback if start date is just YYYY-MM-DD
+            dt = datetime.strptime(request.schedule.startDate, "%Y-%m-%d")
+            base_date = dt.replace(tzinfo=timezone.utc)
+            
+        # Adjust preferred time on the base date first
+        if request.schedule.preferredTime == 'morning':
+            base_date = base_date.replace(hour=9, minute=0, second=0)
+        elif request.schedule.preferredTime == 'afternoon':
+            base_date = base_date.replace(hour=14, minute=0, second=0)
+        elif request.schedule.preferredTime == 'evening':
+            base_date = base_date.replace(hour=18, minute=0, second=0)
+        
+        from app.scheduler.scheduler import schedule_post
+        
+        for idx, post_obj in enumerate(posts_data):
+            content = post_obj.get("content", "")
+            if not content:
+                continue
+                
+            # Calculate scheduled time
+            hours_to_add = idx * request.schedule.gapHours
+            scheduled_time = base_date + timedelta(hours=hours_to_add)
+            
+            # Ensure scheduled time is not in the past
+            if scheduled_time <= datetime.now(timezone.utc):
+                scheduled_time = datetime.now(timezone.utc) + timedelta(minutes=5)
+            
+            # Create post in database
+            post = await PostService.create_post(
+                user_id=current_user,
+                content=content,
+                scheduled_time=scheduled_time,
+                platform=PlatformType.LINKEDIN,
+            )
+            
+            # Schedule in APScheduler
+            await schedule_post(str(post["_id"]), scheduled_time)
+            created_posts.append(post)
+            
+        return {
+            "success": True,
+            "message": f"Successfully generated and scheduled {len(created_posts)} posts",
+            "count": len(created_posts),
+            "posts": [
+                {
+                    "id": str(p["_id"]),
+                    "content": p["content"],
+                    "scheduled_time": p["scheduled_time"].isoformat() if hasattr(p["scheduled_time"], "isoformat") else str(p["scheduled_time"]),
+                    "status": p["status"],
+                }
+                for p in created_posts
+            ],
+        }
+        
+    except ValueError as e:
+        logger.warning(f"Post generation validation error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"success": False, "error": "generation_failed", "message": str(e)},
+        )
+    except Exception as e:
+        logger.error(f"Error generating posts: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "success": False,
+                "error": "internal_server_error",
+                "message": "Failed to generate posts",
+            },
         )
 
 
@@ -728,6 +867,95 @@ async def get_post_stats(
     }
 
 
+
+# ===========================
+# Dashboard Stats Endpoint
+# ===========================
+
+
+@router.get("/api/dashboard/stats", response_model=dict)
+async def get_dashboard_stats(
+    days: int = Query(90, ge=7, le=365, description="Number of days to look back"),
+    current_user: str = Depends(get_current_user),
+):
+    """
+    Aggregated post activity for the dashboard bar chart.
+    Groups posts by ISO week → { week, published, scheduled, failed }.
+    Fast: projects only status + created_at; no heavy aggregation pipeline.
+    """
+    import datetime as _dt
+    from collections import defaultdict
+    from app.db.mongodb import get_database
+
+    MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    try:
+        db       = get_database()
+        since    = datetime.now(timezone.utc) - timedelta(days=days)
+
+        cursor = db["posts"].find(
+            {"user_id": current_user, "created_at": {"$gte": since}},
+            {"status": 1, "created_at": 1, "_id": 0},
+        )
+        posts = await cursor.to_list(length=None)
+
+        # ── Totals ────────────────────────────────────────────────
+        totals = {"published": 0, "scheduled": 0, "failed": 0, "draft": 0}
+        for p in posts:
+            s = p.get("status", "draft")
+            if s == "posted":
+                totals["published"] += 1
+            elif s in totals:
+                totals[s] += 1
+
+        # ── Weekly grouping ───────────────────────────────────────
+        weekly: dict = defaultdict(lambda: {"published": 0, "scheduled": 0, "failed": 0})
+
+        for p in posts:
+            raw = p.get("created_at")
+            # Coerce to datetime regardless of storage type
+            if isinstance(raw, _dt.datetime):
+                created = raw
+            elif isinstance(raw, str):
+                try:
+                    created = _dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+            else:
+                continue
+
+            iso = created.isocalendar()          # (iso_year, iso_week, iso_weekday)
+            key = (iso[0], iso[1])               # use ISO year, not calendar year
+
+            s = p.get("status", "draft")
+            if s == "posted":
+                weekly[key]["published"] += 1
+            elif s == "scheduled":
+                weekly[key]["scheduled"] += 1
+            elif s == "failed":
+                weekly[key]["failed"] += 1
+
+        # ── Build chart list ──────────────────────────────────────
+        chart = []
+        for (iso_year, week_num) in sorted(weekly.keys()):
+            monday = _dt.datetime.strptime(
+                f"{iso_year}-W{week_num:02d}-1", "%G-W%V-%u"
+            )
+            week_of_month = (monday.day - 1) // 7 + 1
+            label = f"{MONTH_ABBR[monday.month - 1]} W{week_of_month}"
+            chart.append({"week": label, **weekly[(iso_year, week_num)]})
+
+        return {"chart": chart, "totals": totals}
+
+    except Exception as e:
+        logger.error(f"Dashboard stats error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch dashboard stats: {str(e)}",
+        )
+
+
 # ===========================
 # Debug Endpoints
 # ===========================
@@ -872,6 +1100,101 @@ async def test_post_to_linkedin(
             "success": False,
             "error": str(e),
             "message": "Test post failed - check the error above"
+        }
+
+
+@router.get("/debug/scheduler-jobs", response_model=dict)
+async def debug_scheduler_jobs(
+    current_user: str = Depends(get_current_user),
+):
+    """
+    DEBUG ENDPOINT: View all scheduled jobs in the queue.
+    
+    Helps troubleshoot scheduling issues by showing:
+    - How many jobs are scheduled
+    - When each job is set to run
+    - Job IDs and status
+    
+    Args:
+        current_user: User ID (from JWT token)
+    
+    Returns:
+        List of scheduled jobs with details
+    """
+    try:
+        from app.scheduler.scheduler import get_scheduler
+        
+        sched = get_scheduler()
+        jobs = sched.get_jobs()
+        
+        job_list = []
+        for job in jobs:
+            job_list.append({
+                "id": job.id,
+                "func": str(job.func),
+                "next_run_time": str(job.next_run_time),
+                "args": str(job.args),
+            })
+        
+        return {
+            "total_jobs": len(job_list),
+            "jobs": job_list,
+            "scheduler_state": "running" if sched.running else "stopped",
+        }
+    
+    except Exception as e:
+        logger.error(f"Scheduler debug error: {str(e)}")
+        return {
+            "error": str(e),
+            "message": "Failed to fetch scheduler jobs"
+        }
+
+
+@router.post("/debug/test-timezone-conversion", response_model=dict)
+async def debug_timezone_conversion(
+    scheduled_time: str = Query(..., description="ISO datetime to test (e.g., 2026-05-04T23:38:00Z)"),
+    current_user: str = Depends(get_current_user),
+):
+    """
+    DEBUG ENDPOINT: Test timezone conversion and verify time handling.
+    
+    Shows:
+    - What time was received from frontend
+    - How it's interpreted by backend
+    - How it would be stored and displayed
+    
+    Args:
+        scheduled_time: ISO format datetime string from frontend
+        current_user: User ID (from JWT token)
+    
+    Returns:
+        Detailed breakdown of timezone handling
+    """
+    try:
+        logger.info(f"[DEBUG] Timezone test - Input: {scheduled_time}")
+        
+        # Parse the ISO string
+        parsed_time = datetime.fromisoformat(scheduled_time.replace('Z', '+00:00'))
+        logger.info(f"[DEBUG] Parsed as datetime: {parsed_time}")
+        logger.info(f"[DEBUG] Timezone aware: {parsed_time.tzinfo is not None}")
+        logger.info(f"[DEBUG] Timezone offset: {parsed_time.tzinfo}")
+        
+        # What it would look like in different formats
+        return {
+            "received": scheduled_time,
+            "parsed_iso": parsed_time.isoformat(),
+            "parsed_utc": str(parsed_time),
+            "timestamp": parsed_time.timestamp(),
+            "now_utc": datetime.now(timezone.utc).isoformat(),
+            "is_future": parsed_time > datetime.now(timezone.utc),
+            "message": "Time conversion debug info"
+        }
+    
+    except Exception as e:
+        logger.error(f"Timezone conversion test failed: {str(e)}")
+        return {
+            "error": str(e),
+            "message": "Failed to process timezone conversion"
         }
 
 

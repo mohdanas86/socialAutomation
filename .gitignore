@@ -2,6 +2,7 @@
 venv/
 env/
 ENV/
+.env/
 
 # Python cache
 __pycache__/
@@ -44,3 +45,5 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+posts_content.txt

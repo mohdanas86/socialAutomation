@@ -30,7 +30,7 @@ For now, APScheduler is perfect.
 
 import asyncio
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -108,14 +108,19 @@ async def schedule_post(post_id: str, scheduled_time: datetime) -> None:
     """
     Register a post to be published at scheduled time.
 
-    Called when user creates a scheduled post.
+    Called when user creates a scheduled post or during startup reload.
 
     Args:
         post_id: MongoDB ObjectId of post
-        scheduled_time: When to publish
+        scheduled_time: When to publish (should be UTC datetime)
     """
     try:
         sched = get_scheduler()
+        
+        # Ensure scheduled_time is timezone-aware (UTC)
+        if scheduled_time.tzinfo is None:
+            logger.warning(f"Post {post_id} has naive datetime, treating as UTC")
+            scheduled_time = scheduled_time.replace(tzinfo=timezone.utc)
 
         # Use DateTrigger to run once at specific time
         job = sched.add_job(
@@ -127,7 +132,12 @@ async def schedule_post(post_id: str, scheduled_time: datetime) -> None:
             replace_existing=True,  # If job exists, replace it
         )
 
-        logger.info(f"Scheduled post {post_id} for {scheduled_time}")
+        logger.info(f"✅ Scheduled post {post_id} for {scheduled_time} (UTC)")
+        return job
+
+    except Exception as e:
+        logger.error(f"❌ Error scheduling post {post_id}: {str(e)}")
+        raise
         return job
 
     except Exception as e:
@@ -359,8 +369,11 @@ async def load_existing_scheduled_posts() -> None:
     """
     Load all currently scheduled posts from database on startup.
 
-    When app restarts, all jobs are lost (they're in memory).
-    This function reloads jobs from database so they're not missed.
+    When app restarts, all jobs in memory are lost (MemoryJobStore).
+    This function reloads ALL scheduled posts from database so they're not missed.
+
+    CRITICAL: Must load ALL scheduled posts (past and future), not just ones due now.
+    If we only load past posts, future posts won't be scheduled!
 
     Called in app.main.py after scheduler and database are initialized.
 
@@ -373,15 +386,16 @@ async def load_existing_scheduled_posts() -> None:
     For now, this is sufficient for MVP.
     """
     try:
-        logger.info("Loading scheduled posts from database...")
+        logger.info("Loading all scheduled posts from database...")
 
-        posts = await PostService.get_posts_to_schedule()
+        # Load ALL scheduled posts (past and future)
+        posts = await PostService.get_all_scheduled_posts()
 
         for post in posts:
             # Re-schedule each post
             await schedule_post(str(post["_id"]), post["scheduled_time"])
 
-        logger.info(f"Loaded {len(posts)} scheduled posts")
+        logger.info(f"✅ Loaded and scheduled {len(posts)} posts")
 
     except Exception as e:
         logger.error(f"Error loading scheduled posts: {str(e)}")

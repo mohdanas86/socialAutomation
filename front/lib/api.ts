@@ -2,7 +2,7 @@ import axios from 'axios'
 import Cookie from 'js-cookie'
 import { useAuthStore } from './store'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
 
 const client = axios.create({
     baseURL: API_URL,
@@ -89,6 +89,17 @@ export const postAPI = {
     getStats: async (id: string) => {
         const response = await client.get(`/api/posts/${id}/stats`)
         return response.data
+    },
+}
+
+// Dashboard API
+export const dashboardAPI = {
+    getStats: async (days: 7 | 30 | 90 = 90) => {
+        const response = await client.get('/api/dashboard/stats', { params: { days } })
+        return response.data as {
+            chart: { week: string; published: number; scheduled: number; failed: number }[]
+            totals: { published: number; scheduled: number; failed: number; draft: number }
+        }
     },
 }
 
